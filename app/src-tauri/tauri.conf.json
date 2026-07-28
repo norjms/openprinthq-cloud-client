@@ -1,0 +1,68 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "OpenPrintHQ Cloud Client",
+  "version": "0.0.1",
+  "identifier": "com.openprinthq.cloudclient",
+  "build": {
+    "frontendDist": "../ui"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "label": "main",
+        "title": "OpenPrintHQ Cloud Client",
+        "width": 440,
+        "height": 600,
+        "minWidth": 380,
+        "minHeight": 480,
+        "resizable": true,
+        "visible": false,
+        "center": true
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; connect-src 'self' https://git.nnlink.org https://openprinthq.com https:; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["msi", "deb", "rpm", "app"],
+    "category": "Utility",
+    "shortDescription": "OpenPrintHQ local connector",
+    "longDescription": "Connects a cloud-hosted OpenPrintHQ account to 3D printers on your local network — outbound-only, no port-forwarding.",
+    "publisher": "OpenPrintHQ",
+    "homepage": "https://openprinthq.com",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "resources": {
+      "../../agent/src": "agent/src",
+      "../../agent/package.json": "agent/package.json",
+      "../../scripts": "scripts"
+    },
+    "externalBin": ["binaries/node"],
+    "linux": {
+      "deb": {
+        "depends": ["nodejs (>= 20)"]
+      }
+    },
+    "windows": {
+      "wix": {
+        "language": "en-US"
+      }
+    },
+    "macOS": {
+      "minimumSystemVersion": "11.0"
+    }
+  },
+  "plugins": {
+    "shell": {
+      "open": true
+    }
+  }
+}

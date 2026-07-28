@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- OpenPrintHQ Cloud Client — productbuild distribution definition. -->
+<installer-gui-script minSpecVersion="2">
+  <title>OpenPrintHQ Cloud Client</title>
+  <organization>com.openprinthq</organization>
+  <domains enable_localSystem="true"/>
+  <options customize="never" require-scripts="false" rootVolumeOnly="true"/>
+  <volume-check>
+    <allowed-os-versions>
+      <os-version min="11.0"/>
+    </allowed-os-versions>
+  </volume-check>
+  <choices-outline>
+    <line choice="default">
+      <line choice="com.openprinthq.cloudclient"/>
+    </line>
+  </choices-outline>
+  <choice id="default"/>
+  <choice id="com.openprinthq.cloudclient" visible="false">
+    <pkg-ref id="com.openprinthq.cloudclient"/>
+  </choice>
+  <pkg-ref id="com.openprinthq.cloudclient" version="0.0.1" onConclusion="none">component.pkg</pkg-ref>
+</installer-gui-script>

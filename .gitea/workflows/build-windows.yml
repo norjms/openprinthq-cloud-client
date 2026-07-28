@@ -1,0 +1,59 @@
+# OpenPrintHQ Cloud Client — Windows CI (MSI, self-signed).
+# Runs on the native-Windows self-hosted runner (Rust + WiX + Node/Tauri).
+# Verifies the MSI builds on push/PR; the release is cut by release.yml on tag.
+name: build-windows
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "app/**"
+      - "agent/**"
+      - "scripts/**"
+      - "installer/windows/**"
+      - ".gitea/workflows/build-windows.yml"
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build-windows:
+    runs-on: [self-hosted, windows, x64]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Ensure tauri-cli
+        shell: pwsh
+        run: |
+          if (-not (cargo tauri --version 2>$null)) {
+            cargo install tauri-cli --version '^2.0' --locked
+          }
+
+      - name: Fetch bundled Node sidecar
+        shell: pwsh
+        run: powershell -ExecutionPolicy Bypass -File scripts/fetch-node.ps1 -Triple x86_64-pc-windows-msvc -OutDir app/src-tauri/binaries
+
+      - name: Build MSI
+        shell: pwsh
+        working-directory: app
+        run: cargo tauri build --bundles msi
+
+      - name: Sign MSI (self-signed, if a cert secret is configured)
+        shell: pwsh
+        env:
+          CERT_B64: ${{ secrets.WINDOWS_CERT_PFX_BASE64 }}
+          CERT_PASS: ${{ secrets.WINDOWS_CERT_PASSWORD }}
+        run: |
+          if (-not $env:CERT_B64) { Write-Host "No signing secret set — skipping signing."; exit 0 }
+          $pfx = Join-Path $env:TEMP "ophq-codesign.pfx"
+          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:CERT_B64))
+          $signtool = Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin\*\x64\signtool.exe" -ErrorAction SilentlyContinue | Select-Object -Last 1
+          if (-not $signtool) { throw "signtool.exe not found (install the Windows SDK)" }
+          $msi = Get-ChildItem app/src-tauri/target/release/bundle/msi/*.msi | Select-Object -First 1
+          & $signtool.FullName sign /f $pfx /p $env:CERT_PASS /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 $msi.FullName
+          Remove-Item $pfx -Force
+
+      - uses: actions/upload-artifact@v3
+        with:
+          name: windows-artifacts
+          path: app/src-tauri/target/release/bundle/msi/*.msi
+          if-no-files-found: error

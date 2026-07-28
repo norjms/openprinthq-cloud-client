@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>OpenPrintHQ Cloud Client</title>
+    <style>
+      :root {
+        --bg: #0f1115;
+        --panel: #171a21;
+        --panel-2: #1e222b;
+        --text: #e7e9ee;
+        --muted: #9aa2b1;
+        --accent: #4c8dff;
+        --ok: #37c46b;
+        --warn: #f0b429;
+        --err: #ef5b5b;
+        --border: #272c37;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font: 13px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        background: var(--bg);
+        color: var(--text);
+        -webkit-user-select: none;
+        user-select: none;
+      }
+      header {
+        display: flex; align-items: center; gap: 10px;
+        padding: 14px 16px; border-bottom: 1px solid var(--border);
+      }
+      header .mark {
+        width: 26px; height: 26px; border-radius: 7px;
+        background: linear-gradient(135deg, var(--accent), #7b5bff);
+        display: grid; place-items: center; font-weight: 700; color: #fff; font-size: 13px;
+      }
+      header h1 { font-size: 14px; margin: 0; font-weight: 600; }
+      header .sub { color: var(--muted); font-size: 11px; }
+      .pill {
+        margin-left: auto; display: inline-flex; align-items: center; gap: 6px;
+        padding: 4px 10px; border-radius: 999px; font-size: 11px; font-weight: 600;
+        background: var(--panel-2); color: var(--muted); border: 1px solid var(--border);
+      }
+      .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+      .pill.ok { color: var(--ok); } .pill.ok .dot { background: var(--ok); box-shadow: 0 0 6px var(--ok); }
+      .pill.warn { color: var(--warn); } .pill.warn .dot { background: var(--warn); }
+      .pill.err { color: var(--err); } .pill.err .dot { background: var(--err); }
+      main { padding: 14px 16px 20px; }
+      .card { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 14px; margin-bottom: 12px; }
+      .card h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin: 0 0 10px; }
+      label { display: block; font-size: 11px; color: var(--muted); margin: 10px 0 4px; }
+      input, textarea {
+        width: 100%; background: var(--panel-2); border: 1px solid var(--border); color: var(--text);
+        border-radius: 8px; padding: 8px 10px; font: inherit; user-select: text;
+      }
+      input:focus, textarea:focus { outline: none; border-color: var(--accent); }
+      textarea { resize: vertical; min-height: 54px; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 11px; }
+      .btns { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+      button {
+        appearance: none; border: 1px solid var(--border); background: var(--panel-2); color: var(--text);
+        border-radius: 8px; padding: 8px 12px; font: inherit; font-weight: 600; cursor: pointer;
+      }
+      button:hover { border-color: var(--accent); }
+      button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+      .muted { color: var(--muted); }
+      details summary { cursor: pointer; color: var(--muted); font-size: 11px; margin-top: 6px; }
+      .out {
+        margin-top: 10px; background: #10131a; border: 1px solid var(--border); border-radius: 8px;
+        padding: 10px; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 11px;
+        white-space: pre-wrap; word-break: break-all; user-select: text; display: none;
+      }
+      .out.show { display: block; }
+      footer { padding: 10px 16px 16px; color: var(--muted); font-size: 11px; display: flex; gap: 10px; align-items: center; }
+      footer a { color: var(--accent); text-decoration: none; cursor: pointer; }
+      .grow { flex: 1; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <div class="mark">OP</div>
+      <div>
+        <h1>OpenPrintHQ Cloud Client</h1>
+        <div class="sub">Local connector · outbound-only</div>
+      </div>
+      <span id="pill" class="pill"><span class="dot"></span><span id="pillText">starting…</span></span>
+    </header>
+
+    <main>
+      <div class="card">
+        <h2>Connection</h2>
+        <label for="control_url">Your OpenPrintHQ instance URL</label>
+        <input id="control_url" placeholder="https://openprinthq.com" />
+        <label for="token">Connector token <span class="muted">(Settings → Connectors → New connector)</span></label>
+        <input id="token" type="password" placeholder="paste your connector token" />
+        <label for="name">Connector name</label>
+        <input id="name" placeholder="cloud-client" />
+
+        <details>
+          <summary>Advanced (allow-list, ports, signing key, test printer)</summary>
+          <label for="allow">Allowed LAN hosts <span class="muted">(comma-separated; "private" = all RFC1918)</span></label>
+          <input id="allow" placeholder="private" />
+          <label for="allow_ports">Allowed ports</label>
+          <input id="allow_ports" placeholder="80,443,7125,8080,8081,8888,3000,1883,8883,990,21" />
+          <label for="test_printer">Test printer for self-test <span class="muted">(host or host:port)</span></label>
+          <input id="test_printer" placeholder="192.168.1.50:7125" />
+          <label for="signing_pubkey">Command-signing public key (PEM) <span class="muted">(recommended)</span></label>
+          <textarea id="signing_pubkey" placeholder="-----BEGIN PUBLIC KEY-----&#10;...&#10;-----END PUBLIC KEY-----"></textarea>
+        </details>
+
+        <div class="btns">
+          <button class="primary" id="save">Save &amp; connect</button>
+          <button id="start">Start</button>
+          <button id="stop">Stop</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>Tools</h2>
+        <div class="btns">
+          <button id="dashboard">Open dashboard</button>
+          <button id="selftest">Run self-test</button>
+          <button id="pubkey">Show connector key</button>
+          <button id="update">Check for updates</button>
+        </div>
+        <div id="out" class="out"></div>
+      </div>
+    </main>
+
+    <footer>
+      <span class="grow">v<span id="ver">0.0.1</span></span>
+      <a id="repo">Source</a>
+      <a id="releases">Releases</a>
+    </footer>
+
+    <script>
+      const core = window.__TAURI__.core;
+      const evt = window.__TAURI__.event;
+      const invoke = core.invoke;
+      const $ = (id) => document.getElementById(id);
+      const REPO = "https://git.nnlink.org/OpenPrintHQ/openprinthq-cloud-client";
+      const LATEST = REPO + "/releases";
+      const API_LATEST =
+        "https://git.nnlink.org/api/v1/repos/OpenPrintHQ/openprinthq-cloud-client/releases/latest";
+
+      const FIELDS = ["control_url", "token", "name", "allow", "allow_ports", "test_printer", "signing_pubkey"];
+
+      function setPill(status) {
+        const pill = $("pill"), t = $("pillText");
+        pill.className = "pill";
+        if (status.managed_by_service) { pill.classList.add("ok"); t.textContent = "managed by service"; return; }
+        if (status.connected) { pill.classList.add("ok"); t.textContent = "connected"; return; }
+        if (status.running) { pill.classList.add("warn"); t.textContent = status.message || "connecting…"; return; }
+        pill.classList.add("err"); t.textContent = status.message || "stopped";
+      }
+
+      function showOut(text) { const o = $("out"); o.textContent = text; o.classList.add("show"); }
+
+      async function loadConfig() {
+        const cfg = await invoke("get_config");
+        for (const f of FIELDS) if (f in cfg) $(f).value = cfg[f] || "";
+      }
+      async function saveConfig() {
+        const config = {};
+        for (const f of FIELDS) config[f] = $(f).value.trim();
+        await invoke("save_config", { config });
+        showOut("Saved. Connecting…");
+      }
+
+      async function checkUpdate() {
+        showOut("Checking for updates…");
+        try {
+          const res = await fetch(API_LATEST, { headers: { accept: "application/json" } });
+          if (!res.ok) throw new Error("HTTP " + res.status);
+          const rel = await res.json();
+          const latest = (rel.tag_name || "").replace(/^v/, "");
+          const cur = await invoke("app_version");
+          if (latest && latest !== cur) {
+            showOut(`Update available: ${latest} (you have ${cur}).\nOpening the releases page…`);
+            invoke("open_external", { url: rel.html_url || LATEST });
+          } else {
+            showOut(`You're up to date (v${cur}).`);
+          }
+        } catch (e) {
+          showOut("Update check failed: " + e + "\nYou can browse releases manually.");
+        }
+      }
+
+      async function selfTest() {
+        showOut("Running self-test…");
+        const r = await invoke("run_self_test");
+        let out = `Cloud: ${r.cloud_ok ? "OK" : "FAIL"} — ${r.cloud_detail}\n`;
+        if (r.printer_ok === null) out += "Printer: (no test printer set)";
+        else out += `Printer: ${r.printer_ok ? "OK" : "FAIL"} — ${r.printer_detail}`;
+        showOut(out);
+      }
+
+      async function showPubkey() {
+        showOut("Reading connector key…");
+        try {
+          const key = await invoke("connector_pubkey");
+          showOut("Register this in Settings → Connectors → Key:\n\n" + key);
+        } catch (e) { showOut("Could not read key: " + e); }
+      }
+
+      $("save").onclick = saveConfig;
+      $("start").onclick = () => invoke("start_connector");
+      $("stop").onclick = () => invoke("stop_connector");
+      $("dashboard").onclick = () => invoke("open_dashboard");
+      $("selftest").onclick = selfTest;
+      $("pubkey").onclick = showPubkey;
+      $("update").onclick = checkUpdate;
+      $("repo").onclick = () => invoke("open_external", { url: REPO });
+      $("releases").onclick = () => invoke("open_external", { url: LATEST });
+
+      evt.listen("connector-status", (e) => setPill(e.payload));
+      evt.listen("open-updates", checkUpdate);
+
+      (async () => {
+        $("ver").textContent = await invoke("app_version");
+        await loadConfig();
+        setPill(await invoke("get_status"));
+      })();
+    </script>
+  </body>
+</html>

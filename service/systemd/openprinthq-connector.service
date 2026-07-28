@@ -1,0 +1,42 @@
+# OpenPrintHQ Cloud Client — systemd service (Linux)
+#
+# Runs the connector headlessly at boot (no login needed), reading the shared
+# config.json written by the tray app. Installed by the deb/rpm layout at
+# /usr/lib/openprinthq-cloud-client/. Enable with:
+#
+#   sudo mkdir -p /etc/openprinthq
+#   # write /etc/openprinthq/config.json (or use the tray app), chmod 600
+#   sudo cp /usr/lib/openprinthq-cloud-client/service/openprinthq-connector.service \
+#           /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now openprinthq-connector
+#   journalctl -u openprinthq-connector -f
+
+[Unit]
+Description=OpenPrintHQ Cloud Client connector
+Documentation=https://git.nnlink.org/OpenPrintHQ/openprinthq-cloud-client
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Requires Node.js >= 20 on PATH (the deb declares a dependency on nodejs).
+ExecStart=/usr/bin/node /usr/lib/openprinthq-cloud-client/scripts/run-connector.mjs
+Environment=OPHQ_CONFIG_FILE=/etc/openprinthq/config.json
+Environment=OPHQ_AGENT_FILE=/usr/lib/openprinthq-cloud-client/agent/src/agent.js
+Restart=always
+RestartSec=5
+
+# Hardening: the connector needs only outbound network + LAN access.
+DynamicUser=yes
+StateDirectory=openprinthq
+# config.json holds the token — keep it readable only by root and the service.
+# When using DynamicUser, place config.json under the StateDirectory instead
+# (/var/lib/openprinthq/config.json) and point OPHQ_CONFIG_FILE there.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target
