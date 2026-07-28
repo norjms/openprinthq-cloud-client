@@ -563,12 +563,18 @@ pub fn run() {
                 ],
             )?;
 
-            let icon = app
-                .default_window_icon()
-                .cloned()
-                .expect("bundled default window icon");
+            // Dedicated tray/menu-bar mark (the OpenPrintHQ logo). Rendered as a
+            // template on macOS so it adapts to the light/dark menu bar.
+            let tray_icon = match tauri::image::Image::from_bytes(include_bytes!("../icons/tray.png")) {
+                Ok(img) => img,
+                Err(_) => app
+                    .default_window_icon()
+                    .cloned()
+                    .expect("bundled default window icon"),
+            };
             let _tray = TrayIconBuilder::with_id("main")
-                .icon(icon)
+                .icon(tray_icon)
+                .icon_as_template(true)
                 .tooltip("OpenPrintHQ Cloud Client")
                 .menu(&menu)
                 .show_menu_on_left_click(false)
