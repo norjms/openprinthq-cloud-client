@@ -43,9 +43,8 @@ cd "$ROOT"
 
 # --- host arch -> default target --------------------------------------------
 HOST_ARCH="$(uname -m)"
-if [ -z "${TARGET:-}" ]; then
-  if [ "$HOST_ARCH" = "arm64" ]; then TARGET="aarch64-apple-darwin"; else TARGET="x86_64-apple-darwin"; fi
-fi
+if [ "$HOST_ARCH" = "arm64" ]; then HOST_TRIPLE="aarch64-apple-darwin"; else HOST_TRIPLE="x86_64-apple-darwin"; fi
+if [ -z "${TARGET:-}" ]; then TARGET="$HOST_TRIPLE"; fi
 echo "==> Building $OWNER/$REPO v$VERSION for $TARGET"
 
 # --- toolchain --------------------------------------------------------------
@@ -90,9 +89,16 @@ fi
 
 # --- build the app ----------------------------------------------------------
 echo "==> tauri build..."
-( cd app && cargo tauri build --target "$TARGET" --bundles app )
-
-APP_DIR="app/src-tauri/target/$TARGET/release/bundle/macos"
+if [ "$TARGET" = "$HOST_TRIPLE" ]; then
+  # Native build: omit --target so a plain cargo (no rustup-managed target std)
+  # builds against the host toolchain that's already present.
+  ( cd app && cargo tauri build --bundles app )
+  APP_DIR="app/src-tauri/target/release/bundle/macos"
+else
+  # Cross / universal build: --target is required (and so is rustup + the target).
+  ( cd app && cargo tauri build --target "$TARGET" --bundles app )
+  APP_DIR="app/src-tauri/target/$TARGET/release/bundle/macos"
+fi
 APP_PATH="$(/usr/bin/find "$APP_DIR" -maxdepth 1 -name '*.app' | head -n1)"
 [ -n "$APP_PATH" ] || { echo "ERROR: no .app produced under $APP_DIR"; exit 1; }
 echo "==> Built app: $APP_PATH"
