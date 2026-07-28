@@ -43,14 +43,10 @@
     "resources": {
       "../../agent/src": "agent/src",
       "../../agent/package.json": "agent/package.json",
-      "../../scripts": "scripts"
+      "../../scripts": "scripts",
+      "../../service": "service"
     },
-    "externalBin": ["binaries/node"],
-    "linux": {
-      "deb": {
-        "depends": ["nodejs (>= 20)"]
-      }
-    },
+    "externalBin": ["binaries/ophq-node"],
     "windows": {
       "wix": {
         "language": "en-US"

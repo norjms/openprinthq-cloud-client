@@ -22,7 +22,7 @@ if [ -f "$PLIST" ]; then
 fi
 
 # Non-fatal connectivity self-test.
-NODE="$APP/Contents/MacOS/node"
+NODE="$APP/Contents/MacOS/ophq-node"
 SELFTEST="$APP/Contents/Resources/scripts/self-test.mjs"
 if [ -x "$NODE" ] && [ -f "$SELFTEST" ]; then
   "$NODE" "$SELFTEST" || true

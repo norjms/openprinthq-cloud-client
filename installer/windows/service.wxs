@@ -37,7 +37,7 @@
     <!-- Outbound-allow firewall rule for hardened (default-deny egress) hosts. -->
     <CustomAction Id="OphqOutboundFw"
       Directory="INSTALLDIR"
-      ExeCommand="powershell.exe -ExecutionPolicy Bypass -WindowStyle Hidden -File &quot;[INSTALLDIR]scripts\outbound-allow.ps1&quot; -Program &quot;[INSTALLDIR]node.exe&quot;"
+      ExeCommand="powershell.exe -ExecutionPolicy Bypass -WindowStyle Hidden -File &quot;[INSTALLDIR]scripts\outbound-allow.ps1&quot; -Program &quot;[INSTALLDIR]ophq-node.exe&quot;"
       Execute="deferred" Impersonate="no" Return="ignore" />
 
     <InstallExecuteSequence>

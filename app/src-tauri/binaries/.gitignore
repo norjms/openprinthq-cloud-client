@@ -1,3 +1,3 @@
 # Node sidecar binaries are fetched per-build by scripts/fetch-node.*
-node-*
+ophq-node-*
 !.gitignore
