@@ -37,8 +37,25 @@ cp "$HERE/scripts/preinstall" "$HERE/scripts/postinstall" "$WORK/scripts/"
 chmod +x "$WORK/scripts/preinstall" "$WORK/scripts/postinstall"
 
 # --- component pkg ---
+# pkgbuild auto-detects the .app as a relocatable bundle, which makes the
+# installer skip placing it at /Applications when no existing copy anchors the
+# relocation. Force BundleIsRelocatable=false via a component plist so the app
+# always installs to the payload path.
+pkgbuild --analyze --root "$WORK/root" "$WORK/component.plist" >/dev/null
+python3 - "$WORK/component.plist" <<'PY'
+import plistlib, sys
+p = sys.argv[1]
+with open(p, "rb") as f:
+    comps = plistlib.load(f)
+for c in comps:
+    if "BundleIsRelocatable" in c:
+        c["BundleIsRelocatable"] = False
+with open(p, "wb") as f:
+    plistlib.dump(comps, f)
+PY
 pkgbuild \
   --root "$WORK/root" \
+  --component-plist "$WORK/component.plist" \
   --scripts "$WORK/scripts" \
   --identifier "$IDENT" \
   --version "$VERSION" \
