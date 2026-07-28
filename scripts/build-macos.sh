@@ -93,6 +93,22 @@ else
   bash "$HERE/fetch-node.sh" "$TARGET" "app/src-tauri/binaries"
 fi
 
+# Verify the sidecar Tauri will look for actually exists (it is resolved as
+# binaries/ophq-node-<TAURI_ENV_TARGET_TRIPLE>). Fail loudly with a listing so a
+# mismatch is obvious rather than dying deep inside the bundler.
+EXPECT="app/src-tauri/binaries/ophq-node-$TARGET"
+[ "$TARGET" = "universal-apple-darwin" ] && EXPECT="app/src-tauri/binaries/ophq-node-universal-apple-darwin"
+if [ ! -f "$EXPECT" ]; then
+  echo "ERROR: bundled Node sidecar not found: $EXPECT" >&2
+  echo "       (rust host: $HOST_TRIPLE, target: $TARGET)" >&2
+  echo "       app/src-tauri/binaries/ currently contains:" >&2
+  ls -la app/src-tauri/binaries/ >&2 || echo "       (directory missing)" >&2
+  echo "       Try fetching it directly, then re-run:" >&2
+  echo "         bash scripts/fetch-node.sh $TARGET app/src-tauri/binaries" >&2
+  exit 1
+fi
+echo "==> Sidecar ready: $EXPECT"
+
 # --- build the app ----------------------------------------------------------
 echo "==> tauri build..."
 if [ "$TARGET" = "$HOST_TRIPLE" ]; then
