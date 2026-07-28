@@ -41,11 +41,9 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/.." && pwd)"
 cd "$ROOT"
 
-# --- host arch -> default target --------------------------------------------
-HOST_ARCH="$(uname -m)"
-if [ "$HOST_ARCH" = "arm64" ]; then HOST_TRIPLE="aarch64-apple-darwin"; else HOST_TRIPLE="x86_64-apple-darwin"; fi
-if [ -z "${TARGET:-}" ]; then TARGET="$HOST_TRIPLE"; fi
-echo "==> Building $OWNER/$REPO v$VERSION for $TARGET"
+# --- host arch -> default target (authoritative value set after toolchain) ---
+USER_TARGET="${TARGET:-}"
+if [ "$(uname -m)" = "arm64" ]; then HOST_TRIPLE="aarch64-apple-darwin"; else HOST_TRIPLE="x86_64-apple-darwin"; fi
 
 # --- toolchain --------------------------------------------------------------
 if ! command -v cargo >/dev/null 2>&1; then
@@ -55,6 +53,14 @@ if ! command -v cargo >/dev/null 2>&1; then
   source "$HOME/.cargo/env"
 fi
 export PATH="$HOME/.cargo/bin:$PATH"
+
+# Authoritative host triple from the actual Rust toolchain — a plain cargo can
+# be x86_64 even on an Apple-Silicon Mac (e.g. an Intel Homebrew install), so we
+# match the bundled Node sidecar and build target to it rather than to uname.
+RUSTC_HOST="$(rustc -vV 2>/dev/null | awk '/^host:/{print $2}')"
+[ -n "$RUSTC_HOST" ] && HOST_TRIPLE="$RUSTC_HOST"
+if [ -n "$USER_TARGET" ]; then TARGET="$USER_TARGET"; else TARGET="$HOST_TRIPLE"; fi
+echo "==> Building $OWNER/$REPO v$VERSION for $TARGET (rust host: $HOST_TRIPLE)"
 
 if command -v rustup >/dev/null 2>&1; then
   if [ "$TARGET" = "universal-apple-darwin" ]; then
@@ -78,10 +84,10 @@ if [ "$TARGET" = "universal-apple-darwin" ]; then
   bash "$HERE/fetch-node.sh" x86_64-apple-darwin   "app/src-tauri/binaries"
   if command -v lipo >/dev/null 2>&1; then
     lipo -create \
-      "app/src-tauri/binaries/node-aarch64-apple-darwin" \
-      "app/src-tauri/binaries/node-x86_64-apple-darwin" \
-      -output "app/src-tauri/binaries/node-universal-apple-darwin"
-    chmod +x "app/src-tauri/binaries/node-universal-apple-darwin"
+      "app/src-tauri/binaries/ophq-node-aarch64-apple-darwin" \
+      "app/src-tauri/binaries/ophq-node-x86_64-apple-darwin" \
+      -output "app/src-tauri/binaries/ophq-node-universal-apple-darwin"
+    chmod +x "app/src-tauri/binaries/ophq-node-universal-apple-darwin"
   fi
 else
   bash "$HERE/fetch-node.sh" "$TARGET" "app/src-tauri/binaries"
