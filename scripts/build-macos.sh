@@ -110,16 +110,19 @@ fi
 echo "==> Sidecar ready: $EXPECT"
 
 # --- build the app ----------------------------------------------------------
+# Prefer an explicit --target whenever rustup has that target installed: it
+# forces tauri-cli to use the same triple for BOTH compiling and bundling, which
+# avoids a subtle mismatch where an x86_64 tauri-cli (running under Rosetta on an
+# Apple-Silicon Mac) compiles a native arm64 binary but then tries to bundle the
+# x86_64 Node sidecar. Fall back to a plain native build only when rustup/the
+# target aren't available.
 echo "==> tauri build..."
-if [ "$TARGET" = "$HOST_TRIPLE" ]; then
-  # Native build: omit --target so a plain cargo (no rustup-managed target std)
-  # builds against the host toolchain that's already present.
-  ( cd app && cargo tauri build --bundles app )
-  APP_DIR="app/src-tauri/target/release/bundle/macos"
-else
-  # Cross / universal build: --target is required (and so is rustup + the target).
+if command -v rustup >/dev/null 2>&1 && rustup target list --installed 2>/dev/null | grep -qx "$TARGET"; then
   ( cd app && cargo tauri build --target "$TARGET" --bundles app )
   APP_DIR="app/src-tauri/target/$TARGET/release/bundle/macos"
+else
+  ( cd app && cargo tauri build --bundles app )
+  APP_DIR="app/src-tauri/target/release/bundle/macos"
 fi
 APP_PATH="$(/usr/bin/find "$APP_DIR" -maxdepth 1 -name '*.app' | head -n1)"
 [ -n "$APP_PATH" ] || { echo "ERROR: no .app produced under $APP_DIR"; exit 1; }
