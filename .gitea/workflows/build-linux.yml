@@ -17,7 +17,7 @@ on:
 
 jobs:
   build-linux:
-    runs-on: [self-hosted, linux, amd64]
+    runs-on: [self-hosted, linux, ophq-lin]
     steps:
       - uses: actions/checkout@v4
 
