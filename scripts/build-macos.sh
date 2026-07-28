@@ -57,10 +57,14 @@ if ! command -v cargo >/dev/null 2>&1; then
 fi
 export PATH="$HOME/.cargo/bin:$PATH"
 
-if [ "$TARGET" = "universal-apple-darwin" ]; then
-  rustup target add aarch64-apple-darwin x86_64-apple-darwin >/dev/null
+if command -v rustup >/dev/null 2>&1; then
+  if [ "$TARGET" = "universal-apple-darwin" ]; then
+    rustup target add aarch64-apple-darwin x86_64-apple-darwin >/dev/null
+  else
+    rustup target add "$TARGET" >/dev/null || true
+  fi
 else
-  rustup target add "$TARGET" >/dev/null || true
+  echo "==> rustup not found; assuming the target toolchain is already installed (fine for a native build)."
 fi
 
 if ! cargo tauri --version >/dev/null 2>&1; then
