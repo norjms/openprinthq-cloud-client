@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  OpenPrintHQ Cloud Client — WiX fragment (Windows, WiX v3 / Tauri MSI).
+
+  STATUS: draft, to be wired into the Tauri MSI during the DRYAN01 Windows-runner
+  bring-up, where candle/light run and this can be validated. It is deliberately
+  NOT referenced from tauri.conf.json yet so the base MSI keeps building cleanly
+  (the shipped 0.0.1 MSI installs the app + bundled Node and the tray app
+  supervises the connector at login; boot-without-login via the service is
+  enabled by this fragment or by running service\install-service.ps1 elevated).
+
+  What it adds once wired:
+    * a deferred, elevated CustomAction that registers the Windows service
+      (reuses service\install-service.ps1) so the connector starts at boot with
+      no login;
+    * an outbound-allow firewall rule (reuses scripts\outbound-allow.ps1);
+    * (self-test runs from postinstall on other platforms; on Windows the tray
+      app exposes it via the "Run self-test" button).
+
+  To wire it, add to tauri.conf.json > bundle > windows > wix:
+    "fragmentPaths": ["../../installer/windows/service.wxs"],
+    "customActionRefs": ["OphqInstallSvc", "OphqOutboundFw"]
+  (Tauri injects INSTALLDIR; [INSTALLDIR] resolves to the install folder.)
+-->
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <Fragment>
+    <!-- Register/remove the background service (deferred, runs as SYSTEM). -->
+    <CustomAction Id="OphqInstallSvc"
+      Directory="INSTALLDIR"
+      ExeCommand="powershell.exe -ExecutionPolicy Bypass -WindowStyle Hidden -File &quot;[INSTALLDIR]service\install-service.ps1&quot; -InstallDir &quot;[INSTALLDIR]&quot;"
+      Execute="deferred" Impersonate="no" Return="ignore" />
+    <CustomAction Id="OphqUninstallSvc"
+      Directory="INSTALLDIR"
+      ExeCommand="powershell.exe -ExecutionPolicy Bypass -WindowStyle Hidden -File &quot;[INSTALLDIR]service\uninstall-service.ps1&quot;"
+      Execute="deferred" Impersonate="no" Return="ignore" />
+
+    <!-- Outbound-allow firewall rule for hardened (default-deny egress) hosts. -->
+    <CustomAction Id="OphqOutboundFw"
+      Directory="INSTALLDIR"
+      ExeCommand="powershell.exe -ExecutionPolicy Bypass -WindowStyle Hidden -File &quot;[INSTALLDIR]scripts\outbound-allow.ps1&quot; -Program &quot;[INSTALLDIR]node.exe&quot;"
+      Execute="deferred" Impersonate="no" Return="ignore" />
+
+    <InstallExecuteSequence>
+      <Custom Action="OphqOutboundFw" After="InstallFiles">NOT Installed</Custom>
+      <Custom Action="OphqInstallSvc" After="OphqOutboundFw">NOT Installed</Custom>
+      <Custom Action="OphqUninstallSvc" Before="RemoveFiles">Installed AND (REMOVE="ALL")</Custom>
+    </InstallExecuteSequence>
+  </Fragment>
+</Wix>

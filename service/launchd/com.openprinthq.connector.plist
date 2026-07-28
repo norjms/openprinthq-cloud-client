@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  OpenPrintHQ Cloud Client — launchd LaunchDaemon (macOS).
+
+  A LaunchDaemon (not a LaunchAgent) runs at boot with NO login required. The
+  .pkg installer places this at /Library/LaunchDaemons/ and loads it. It runs
+  the bundled Node sidecar against run-connector.mjs, reading the shared
+  config.json written by the menu-bar app.
+
+  Manage manually with:
+    sudo launchctl bootstrap system /Library/LaunchDaemons/com.openprinthq.connector.plist
+    sudo launchctl bootout system/com.openprinthq.connector
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.openprinthq.connector</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Applications/OpenPrintHQ Cloud Client.app/Contents/MacOS/node</string>
+    <string>/Applications/OpenPrintHQ Cloud Client.app/Contents/Resources/scripts/run-connector.mjs</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>OPHQ_CONFIG_FILE</key><string>/Library/Application Support/OpenPrintHQ/config.json</string>
+    <key>OPHQ_AGENT_FILE</key><string>/Applications/OpenPrintHQ Cloud Client.app/Contents/Resources/agent/src/agent.js</string>
+  </dict>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>StandardOutPath</key><string>/Library/Logs/OpenPrintHQ/connector.log</string>
+  <key>StandardErrorPath</key><string>/Library/Logs/OpenPrintHQ/connector.log</string>
+</dict>
+</plist>

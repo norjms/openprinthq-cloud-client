@@ -1,0 +1,31 @@
+#!/bin/bash
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# OpenPrintHQ Cloud Client — .pkg postinstall (runs as root).
+# Sets up the shared config dir + logs, installs/loads the LaunchDaemon
+# (boot-without-login), and runs a non-fatal connectivity self-test.
+set -u
+
+APP="/Applications/OpenPrintHQ Cloud Client.app"
+SUPPORT="/Library/Application Support/OpenPrintHQ"
+LOGDIR="/Library/Logs/OpenPrintHQ"
+PLIST="/Library/LaunchDaemons/com.openprinthq.connector.plist"
+
+mkdir -p "$SUPPORT" "$LOGDIR"
+chmod 755 "$SUPPORT" "$LOGDIR"
+
+# (Re)load the LaunchDaemon. run-connector.mjs waits for a config, so it is safe
+# to load before the user has configured anything.
+if [ -f "$PLIST" ]; then
+  launchctl bootout system "$PLIST" 2>/dev/null || true
+  launchctl bootstrap system "$PLIST" 2>/dev/null || \
+    launchctl load -w "$PLIST" 2>/dev/null || true
+fi
+
+# Non-fatal connectivity self-test.
+NODE="$APP/Contents/MacOS/node"
+SELFTEST="$APP/Contents/Resources/scripts/self-test.mjs"
+if [ -x "$NODE" ] && [ -f "$SELFTEST" ]; then
+  "$NODE" "$SELFTEST" || true
+fi
+
+exit 0

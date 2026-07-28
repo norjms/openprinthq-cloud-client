@@ -1,0 +1,68 @@
+# OpenPrintHQ Cloud Client — Linux CI (deb / rpm / docker).
+# Runs on the existing self-hosted Linux runner. Verifies the app builds on
+# push/PR; the release is cut by release.yml on a version tag.
+name: build-linux
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "app/**"
+      - "agent/**"
+      - "scripts/**"
+      - "installer/linux/**"
+      - ".gitea/workflows/build-linux.yml"
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build-linux:
+    runs-on: [self-hosted, linux, amd64]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          set -e
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \
+            librsvg2-dev build-essential curl wget file libssl-dev libxdo-dev \
+            pkg-config libsoup-3.0-dev rpm nodejs
+
+      - name: Ensure Rust + tauri-cli
+        run: |
+          set -e
+          if ! command -v cargo >/dev/null; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+          fi
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          export PATH="$HOME/.cargo/bin:$PATH"
+          cargo tauri --version >/dev/null 2>&1 || cargo install tauri-cli --version '^2.0' --locked
+
+      - name: Fetch bundled Node sidecar
+        run: bash scripts/fetch-node.sh x86_64-unknown-linux-gnu app/src-tauri/binaries
+
+      - name: Build deb + rpm
+        working-directory: app
+        run: cargo tauri build --bundles deb,rpm
+
+      - name: Build connector Docker image (save as artifact)
+        run: |
+          set -e
+          docker build -t openprinthq/connector:latest agent
+          mkdir -p dist
+          docker save openprinthq/connector:latest | gzip > dist/openprinthq-connector-docker.tar.gz
+
+      - name: Collect artifacts
+        run: |
+          set -e
+          mkdir -p dist
+          find app/src-tauri/target/release/bundle -type f \( -name '*.deb' -o -name '*.rpm' \) -exec cp {} dist/ \;
+          ls -la dist
+
+      - uses: actions/upload-artifact@v3
+        with:
+          name: linux-artifacts
+          path: dist/*
+          if-no-files-found: error

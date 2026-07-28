@@ -1,0 +1,118 @@
+# OpenPrintHQ Cloud Client — release on a version tag.
+# Builds Windows (signed MSI), Linux (deb/rpm) and the connector Docker image,
+# then publishes a prerelease and attaches all assets. macOS .pkg is built and
+# uploaded separately from a Mac (see scripts/build-macos.sh).
+#
+# Tag to cut a release:  git tag v0.0.1 && git push origin v0.0.1
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+jobs:
+  windows:
+    runs-on: [self-hosted, windows, x64]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Ensure tauri-cli
+        shell: pwsh
+        run: if (-not (cargo tauri --version 2>$null)) { cargo install tauri-cli --version '^2.0' --locked }
+      - name: Fetch Node sidecar
+        shell: pwsh
+        run: powershell -ExecutionPolicy Bypass -File scripts/fetch-node.ps1 -Triple x86_64-pc-windows-msvc -OutDir app/src-tauri/binaries
+      - name: Build MSI
+        shell: pwsh
+        working-directory: app
+        run: cargo tauri build --bundles msi
+      - name: Sign MSI
+        shell: pwsh
+        env:
+          CERT_B64: ${{ secrets.WINDOWS_CERT_PFX_BASE64 }}
+          CERT_PASS: ${{ secrets.WINDOWS_CERT_PASSWORD }}
+        run: |
+          if (-not $env:CERT_B64) { Write-Host "No signing secret — skipping."; exit 0 }
+          $pfx = Join-Path $env:TEMP "ophq-codesign.pfx"
+          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:CERT_B64))
+          $signtool = Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin\*\x64\signtool.exe" -ErrorAction SilentlyContinue | Select-Object -Last 1
+          $msi = Get-ChildItem app/src-tauri/target/release/bundle/msi/*.msi | Select-Object -First 1
+          & $signtool.FullName sign /f $pfx /p $env:CERT_PASS /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 $msi.FullName
+          Remove-Item $pfx -Force
+      - uses: actions/upload-artifact@v3
+        with:
+          name: windows-artifacts
+          path: app/src-tauri/target/release/bundle/msi/*.msi
+
+  linux:
+    runs-on: [self-hosted, linux, amd64]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \
+            librsvg2-dev build-essential curl wget file libssl-dev libxdo-dev \
+            pkg-config libsoup-3.0-dev rpm nodejs
+      - name: Ensure Rust + tauri-cli
+        run: |
+          command -v cargo >/dev/null || curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          export PATH="$HOME/.cargo/bin:$PATH"
+          cargo tauri --version >/dev/null 2>&1 || cargo install tauri-cli --version '^2.0' --locked
+      - name: Fetch Node sidecar
+        run: bash scripts/fetch-node.sh x86_64-unknown-linux-gnu app/src-tauri/binaries
+      - name: Build deb + rpm
+        working-directory: app
+        run: cargo tauri build --bundles deb,rpm
+      - name: Build connector Docker image
+        run: |
+          docker build -t openprinthq/connector:latest agent
+          mkdir -p dist
+          docker save openprinthq/connector:latest | gzip > dist/openprinthq-connector-docker.tar.gz
+      - name: Collect artifacts
+        run: |
+          mkdir -p dist
+          find app/src-tauri/target/release/bundle -type f \( -name '*.deb' -o -name '*.rpm' \) -exec cp {} dist/ \;
+      - uses: actions/upload-artifact@v3
+        with:
+          name: linux-artifacts
+          path: dist/*
+
+  release:
+    needs: [windows, linux]
+    runs-on: [self-hosted, linux, amd64]
+    steps:
+      - uses: actions/download-artifact@v3
+        with:
+          name: windows-artifacts
+          path: assets
+      - uses: actions/download-artifact@v3
+        with:
+          name: linux-artifacts
+          path: assets
+      - name: Create release and upload assets
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          API: ${{ github.api_url }}
+          REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -e
+          body="Beta ${TAG}. Windows (.msi, self-signed), Linux (.deb/.rpm), Docker image. macOS .pkg uploaded separately."
+          rid=$(curl -fsS -H "Authorization: token ${TOKEN}" "${API}/repos/${REPO}/releases/tags/${TAG}" 2>/dev/null | python3 -c 'import sys,json;print(json.load(sys.stdin).get("id",""))' 2>/dev/null || true)
+          if [ -z "$rid" ]; then
+            rid=$(curl -fsS -X POST -H "Authorization: token ${TOKEN}" -H 'Content-Type: application/json' \
+              "${API}/repos/${REPO}/releases" \
+              -d "{\"tag_name\":\"${TAG}\",\"name\":\"OpenPrintHQ Cloud Client ${TAG} (beta)\",\"body\":\"${body}\",\"prerelease\":true}" \
+              | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
+          fi
+          for f in assets/*; do
+            [ -f "$f" ] || continue
+            curl -fsS -X POST -H "Authorization: token ${TOKEN}" \
+              -H 'Content-Type: application/octet-stream' \
+              "${API}/repos/${REPO}/releases/${rid}/assets?name=$(basename "$f")" \
+              --data-binary @"$f" >/dev/null
+            echo "uploaded $(basename "$f")"
+          done

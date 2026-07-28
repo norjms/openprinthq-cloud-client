@@ -1,0 +1,11 @@
+#!/bin/bash
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# OpenPrintHQ Cloud Client — .pkg preinstall (runs as root).
+# Stop any running daemon before files are replaced (clean upgrade).
+set -u
+PLIST="/Library/LaunchDaemons/com.openprinthq.connector.plist"
+if [ -f "$PLIST" ]; then
+  launchctl bootout system "$PLIST" 2>/dev/null || \
+    launchctl unload "$PLIST" 2>/dev/null || true
+fi
+exit 0

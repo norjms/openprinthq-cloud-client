@@ -1,0 +1,29 @@
+# Rust / Tauri build output
+app/src-tauri/target/
+app/src-tauri/gen/schemas/
+**/target/
+
+# Bundled Node sidecars (fetched per-build by scripts/fetch-node.*)
+app/src-tauri/binaries/node-*
+
+# Node
+node_modules/
+
+# Build/dist + packaged installers
+dist/
+*.msi
+*.pkg
+*.deb
+*.rpm
+*.tar.gz
+
+# Signing material — never commit
+*.pfx
+*.p12
+*.snk
+*.cer
+*.key
+
+# OS cruft
+.DS_Store
+Thumbs.db
