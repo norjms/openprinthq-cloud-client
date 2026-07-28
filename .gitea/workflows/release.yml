@@ -45,7 +45,7 @@ jobs:
           path: app/src-tauri/target/release/bundle/msi/*.msi
 
   linux:
-    runs-on: [self-hosted, linux, amd64]
+    runs-on: [self-hosted, linux, ophq-lin]
     steps:
       - uses: actions/checkout@v4
       - name: Install build dependencies
@@ -82,7 +82,7 @@ jobs:
 
   release:
     needs: [windows, linux]
-    runs-on: [self-hosted, linux, amd64]
+    runs-on: [self-hosted, linux, ophq-lin]
     steps:
       - uses: actions/download-artifact@v3
         with:
