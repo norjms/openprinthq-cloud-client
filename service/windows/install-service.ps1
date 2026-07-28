@@ -17,7 +17,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-$node = Join-Path $InstallDir "node.exe"
+$node = Join-Path $InstallDir "ophq-node.exe"
 $launcher = Join-Path $InstallDir "scripts\run-connector.mjs"
 $agent = Join-Path $InstallDir "agent\src\agent.js"
 if (-not (Test-Path $node)) { throw "bundled node.exe not found at $node" }

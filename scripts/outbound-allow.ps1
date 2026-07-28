@@ -6,10 +6,10 @@
 # default, but on hardened machines with a default-deny outbound policy this
 # rule explicitly permits the bundled Node connector to dial out. Run elevated.
 #
-#   powershell -ExecutionPolicy Bypass -File outbound-allow.ps1 [-Program <path\to\node.exe>]
+#   powershell -ExecutionPolicy Bypass -File outbound-allow.ps1 [-Program <path\to\ophq-node.exe>]
 
 param(
-  [string]$Program = "$env:ProgramFiles\OpenPrintHQ Cloud Client\node.exe",
+  [string]$Program = "$env:ProgramFiles\OpenPrintHQ Cloud Client\ophq-node.exe",
   [string]$RuleName = "OpenPrintHQ Connector (outbound)"
 )
 

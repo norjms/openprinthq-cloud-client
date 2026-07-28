@@ -6,7 +6,7 @@
 #
 #   sudo mkdir -p /etc/openprinthq
 #   # write /etc/openprinthq/config.json (or use the tray app), chmod 600
-#   sudo cp /usr/lib/openprinthq-cloud-client/service/openprinthq-connector.service \
+#   sudo cp "/usr/lib/OpenPrintHQ Cloud Client/service/systemd/openprinthq-connector.service" \
 #           /etc/systemd/system/
 #   sudo systemctl daemon-reload
 #   sudo systemctl enable --now openprinthq-connector
@@ -20,10 +20,10 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-# Requires Node.js >= 20 on PATH (the deb declares a dependency on nodejs).
-ExecStart=/usr/bin/node /usr/lib/openprinthq-cloud-client/scripts/run-connector.mjs
+# Uses the bundled Node runtime shipped by the deb/rpm (no system Node needed).
+# run-connector.mjs finds the agent via its sibling ../agent/src/agent.js.
+ExecStart=/usr/bin/ophq-node "/usr/lib/OpenPrintHQ Cloud Client/scripts/run-connector.mjs"
 Environment=OPHQ_CONFIG_FILE=/etc/openprinthq/config.json
-Environment=OPHQ_AGENT_FILE=/usr/lib/openprinthq-cloud-client/agent/src/agent.js
 Restart=always
 RestartSec=5
 

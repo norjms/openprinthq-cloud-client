@@ -280,7 +280,7 @@ async fn run_agent_once(app: &AppHandle, st: &Arc<AppState>) -> Result<(), Strin
 
     let (mut rx, child) = app
         .shell()
-        .sidecar("node")
+        .sidecar("ophq-node")
         .map_err(|e| e.to_string())?
         .args([script.to_string_lossy().to_string()])
         .envs(env)
@@ -427,7 +427,7 @@ async fn connector_pubkey(
     );
     let out = app
         .shell()
-        .sidecar("node")
+        .sidecar("ophq-node")
         .map_err(|e| e.to_string())?
         .args([script.to_string_lossy().to_string(), "--pubkey".to_string()])
         .envs(env)

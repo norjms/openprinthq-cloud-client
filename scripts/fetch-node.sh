@@ -32,7 +32,7 @@ echo "Downloading $URL"
 curl -fsSL "$URL" -o "$TMP/node.tar.gz"
 tar -xzf "$TMP/node.tar.gz" -C "$TMP"
 
-DEST="$OUTDIR/node-${TRIPLE}"
+DEST="$OUTDIR/ophq-node-${TRIPLE}"
 cp "$TMP/${PKG}/bin/node" "$DEST"
 chmod +x "$DEST"
 echo "Placed sidecar: $DEST"

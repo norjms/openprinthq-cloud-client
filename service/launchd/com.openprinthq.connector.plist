@@ -17,7 +17,7 @@
   <key>Label</key><string>com.openprinthq.connector</string>
   <key>ProgramArguments</key>
   <array>
-    <string>/Applications/OpenPrintHQ Cloud Client.app/Contents/MacOS/node</string>
+    <string>/Applications/OpenPrintHQ Cloud Client.app/Contents/MacOS/ophq-node</string>
     <string>/Applications/OpenPrintHQ Cloud Client.app/Contents/Resources/scripts/run-connector.mjs</string>
   </array>
   <key>EnvironmentVariables</key>

@@ -28,7 +28,7 @@ try {
   Write-Host "Downloading $url"
   Invoke-WebRequest -Uri $url -OutFile "$tmp\node.zip"
   Expand-Archive -Path "$tmp\node.zip" -DestinationPath $tmp -Force
-  $dest = Join-Path $OutDir "node-$Triple.exe"
+  $dest = Join-Path $OutDir "ophq-node-$Triple.exe"
   Copy-Item -Force "$tmp\$pkg\node.exe" $dest
   Write-Host "Placed sidecar: $dest"
 } finally {
