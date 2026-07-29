@@ -51,6 +51,8 @@
       .card { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 14px; margin-bottom: 12px; }
       .card h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin: 0 0 10px; }
       label { display: block; font-size: 11px; color: var(--muted); margin: 10px 0 4px; }
+      label.check { display: flex; align-items: flex-start; gap: 8px; margin: 12px 0 2px; }
+      label.check input { width: auto; margin-top: 1px; }
       input, textarea {
         width: 100%; background: var(--panel-2); border: 1px solid var(--border); color: var(--text);
         border-radius: 8px; padding: 8px 10px; font: inherit; user-select: text;
@@ -107,6 +109,7 @@
           <input id="test_printer" placeholder="192.168.1.50:7125" />
           <label for="signing_pubkey">Command-signing public key (PEM) <span class="muted">(recommended)</span></label>
           <textarea id="signing_pubkey" placeholder="-----BEGIN PUBLIC KEY-----&#10;...&#10;-----END PUBLIC KEY-----"></textarea>
+          <label class="check"><input type="checkbox" id="debug" /> Verbose debug logging <span class="muted">(traces every job + LAN request; view under Tools → View logs)</span></label>
         </details>
 
         <div class="btns">
@@ -122,6 +125,7 @@
           <button id="dashboard">Open dashboard</button>
           <button id="selftest">Run self-test</button>
           <button id="pubkey">Show connector key</button>
+          <button id="logs">View logs</button>
           <button id="update">Check for updates</button>
         </div>
         <div id="out" class="out"></div>
@@ -160,10 +164,12 @@
       async function loadConfig() {
         const cfg = await invoke("get_config");
         for (const f of FIELDS) if (f in cfg) $(f).value = cfg[f] || "";
+        $("debug").checked = !!cfg.debug;
       }
       async function saveConfig() {
         const config = {};
         for (const f of FIELDS) config[f] = $(f).value.trim();
+        config.debug = $("debug").checked;
         await invoke("save_config", { config });
         showOut("Saved. Connecting…");
       }
@@ -171,20 +177,22 @@
       async function checkUpdate() {
         showOut("Checking for updates…");
         try {
-          const res = await fetch(API_LATEST, { headers: { accept: "application/json" } });
-          if (!res.ok) throw new Error("HTTP " + res.status);
-          const rel = await res.json();
-          const latest = (rel.tag_name || "").replace(/^v/, "");
-          const cur = await invoke("app_version");
-          if (latest && latest !== cur) {
-            showOut(`Update available: ${latest} (you have ${cur}).\nOpening the releases page…`);
-            invoke("open_external", { url: rel.html_url || LATEST });
+          // Done in the Rust backend (not window.fetch) so it isn't CORS-blocked.
+          const u = await invoke("check_update");
+          if (!u.up_to_date && u.latest) {
+            showOut(`Update available: ${u.latest} (you have ${u.current}).\nOpening the releases page…`);
+            invoke("open_external", { url: u.url });
           } else {
-            showOut(`You're up to date (v${cur}).`);
+            showOut(`You're up to date (v${u.current}).`);
           }
         } catch (e) {
           showOut("Update check failed: " + e + "\nYou can browse releases manually.");
         }
+      }
+
+      async function viewLogs() {
+        const lines = await invoke("get_logs");
+        showOut(lines.length ? lines.slice(-200).join("\n") : "No connector logs yet. Start the connector (enable 'Verbose debug logging' under Advanced for full detail).");
       }
 
       async function selfTest() {
@@ -210,6 +218,7 @@
       $("dashboard").onclick = () => invoke("open_dashboard");
       $("selftest").onclick = selfTest;
       $("pubkey").onclick = showPubkey;
+      $("logs").onclick = viewLogs;
       $("update").onclick = checkUpdate;
       $("repo").onclick = () => invoke("open_external", { url: REPO });
       $("releases").onclick = () => invoke("open_external", { url: LATEST });

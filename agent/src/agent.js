@@ -59,6 +59,12 @@ const CONFIG = {
 function log(...a) { console.error(new Date().toISOString(), '[connector]', ...a); }
 function fail(msg) { console.error('FATAL:', msg); process.exit(1); }
 
+// Verbose tracing — set OPHQ_DEBUG=1 to see every job the connector receives and
+// every request/probe it performs on the LAN (helps trace where a scan or a
+// printer call breaks down). Off by default so normal logs stay quiet.
+const DEBUG = /^(1|true|yes|on)$/i.test(process.env.OPHQ_DEBUG || '');
+function dbg(...a) { if (DEBUG) console.error(new Date().toISOString(), '[connector][debug]', ...a); }
+
 // ---- command signature verification (optional but recommended) -----------
 const PSS = { padding: crypto.constants.RSA_PKCS1_PSS_PADDING, saltLength: crypto.constants.RSA_PSS_SALTLEN_DIGEST };
 let signPubKey = null;
@@ -171,6 +177,7 @@ async function runHttpJob(job) {
   if (!hostAllowed(host)) return { status: 403, error: `host ${host} not in allow-list` };
   if (!portAllowed(port)) return { status: 403, error: `port ${port} not in allow-list` };
   const url = `${scheme}://${host}:${port}${path.startsWith('/') ? path : '/' + path}`;
+  dbg('-> LAN request', method, url);
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), CONFIG.requestTimeoutMs);
   try {
@@ -229,11 +236,13 @@ function dataTcp(job) { const s = sockets.get(job.id); if (s && job.data) s.writ
 function closeTcp(job) { const s = sockets.get(job.id); if (s) { s.end(); sockets.delete(job.id); } }
 
 async function handleJob(job) {
+  dbg('job received', { id: job.id, kind: job.kind || 'http', host: job.host, port: job.port, scheme: job.scheme, method: job.method, path: job.path });
   if (!verifyCommand(job)) return;   // drop commands not signed by the control-plane
   if (job.kind === 'tcp-open') return openTcp(job);
   if (job.kind === 'tcp-data') return dataTcp(job);
   if (job.kind === 'tcp-close') return closeTcp(job);
   const result = (job.kind === 'tcp-probe') ? await runTcpProbe(job) : await runHttpJob(job);
+  dbg('job result', { id: job.id, kind: job.kind || 'http', status: result.status, ok: result.ok, error: result.error });
   await post({ id: job.id, ...result });
 }
 

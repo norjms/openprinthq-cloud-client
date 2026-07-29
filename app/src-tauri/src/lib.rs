@@ -48,6 +48,9 @@ pub struct Config {
     /// Optional "host" or "host:port" used by the connectivity self-test.
     #[serde(default)]
     pub test_printer: String,
+    /// Verbose connector logging (sets OPHQ_DEBUG for the agent).
+    #[serde(default)]
+    pub debug: bool,
 }
 
 #[derive(Serialize, Clone, Default)]
@@ -66,6 +69,23 @@ pub struct AppState {
     loop_running: AtomicBool,
     child: Mutex<Option<CommandChild>>,
     tray_status_item: Mutex<Option<MenuItem<Wry>>>,
+    logs: Mutex<std::collections::VecDeque<String>>,
+}
+
+impl AppState {
+    fn push_log(&self, line: &str) {
+        let mut l = self.logs.lock().unwrap();
+        for part in line.split('\n') {
+            let t = part.trim_end();
+            if t.is_empty() {
+                continue;
+            }
+            l.push_back(t.to_string());
+            while l.len() > 800 {
+                l.pop_front();
+            }
+        }
+    }
 }
 
 impl AppState {
@@ -188,6 +208,9 @@ fn agent_env(cfg: &Config, key_path: &PathBuf) -> HashMap<String, String> {
         "OPHQ_CLIENT_KEY_FILE".into(),
         key_path.to_string_lossy().to_string(),
     );
+    if cfg.debug {
+        env.insert("OPHQ_DEBUG".into(), "1".into());
+    }
     env
 }
 
@@ -298,6 +321,7 @@ async fn run_agent_once(app: &AppHandle, st: &Arc<AppState>) -> Result<(), Strin
         match event {
             CommandEvent::Stderr(bytes) | CommandEvent::Stdout(bytes) => {
                 let line = String::from_utf8_lossy(&bytes);
+                st.push_log(&line);
                 update_from_line(app, st, &line);
             }
             CommandEvent::Terminated(_) => break,
@@ -413,6 +437,56 @@ fn open_external(app: AppHandle, url: String) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
+#[tauri::command]
+fn get_logs(state: State<'_, Arc<AppState>>) -> Vec<String> {
+    state.logs.lock().unwrap().iter().cloned().collect()
+}
+
+#[derive(Serialize)]
+pub struct UpdateInfo {
+    current: String,
+    latest: String,
+    up_to_date: bool,
+    url: String,
+}
+
+/// Check the repo's latest release. Done in Rust (not the webview) so it isn't
+/// blocked by CORS — the WebKit webview can't fetch the Gitea API cross-origin.
+#[tauri::command]
+async fn check_update() -> Result<UpdateInfo, String> {
+    tauri::async_runtime::spawn_blocking(|| {
+        let current = env!("CARGO_PKG_VERSION").to_string();
+        let releases = "https://git.nnlink.org/OpenPrintHQ/openprinthq-cloud-client/releases";
+        let json: serde_json::Value = ureq::get(REPO_API)
+            .set("accept", "application/json")
+            .timeout(std::time::Duration::from_secs(12))
+            .call()
+            .map_err(|e| format!("network error: {e}"))?
+            .into_json()
+            .map_err(|e| format!("bad response: {e}"))?;
+        let latest = json
+            .get("tag_name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim_start_matches('v')
+            .to_string();
+        let url = json
+            .get("html_url")
+            .and_then(|v| v.as_str())
+            .unwrap_or(releases)
+            .to_string();
+        let up_to_date = latest.is_empty() || latest == current;
+        Ok(UpdateInfo {
+            current,
+            latest,
+            up_to_date,
+            url,
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// Print this connector's public key (for Settings → Connectors → Key).
 #[tauri::command]
 async fn connector_pubkey(
@@ -526,6 +600,7 @@ pub fn run() {
                 loop_running: AtomicBool::new(false),
                 child: Mutex::new(None),
                 tray_status_item: Mutex::new(None),
+                logs: Mutex::new(std::collections::VecDeque::new()),
             });
             app.manage(state.clone());
 
@@ -661,7 +736,9 @@ pub fn run() {
             connector_pubkey,
             run_self_test,
             app_version,
-            open_external
+            open_external,
+            get_logs,
+            check_update
         ])
         .build(tauri::generate_context!())
         .expect("error while building OpenPrintHQ Cloud Client")
