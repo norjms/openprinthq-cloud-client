@@ -24,6 +24,7 @@
 
 import net from 'node:net';
 import dgram from 'node:dgram';
+import os from 'node:os';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 
@@ -272,6 +273,38 @@ async function runDiscover(job) {
     const text = msg.toString('utf8');
     if (/bambu|3dprinter|bambulab/i.test(text)) addBambu(parseSsdpHeaders(text), rinfo.address);
   };
+  // Klipper/Moonraker printers don't broadcast; probe the LAN for :7125.
+  const probeKlipper = async (deadline) => {
+    const nets = os.networkInterfaces();
+    const bases = new Set();
+    for (const list of Object.values(nets)) {
+      for (const ni of list || []) {
+        if (ni && ni.family === 'IPv4' && !ni.internal) {
+          const p = ni.address.split('.');
+          if (p.length === 4) bases.add(p.slice(0, 3).join('.'));  // /24
+        }
+      }
+    }
+    const hosts = [];
+    for (const b of bases) for (let i = 1; i <= 254; i++) hosts.push(`${b}.${i}`);
+    let idx = 0;
+    const probeOne = async (ip) => {
+      const ac = new AbortController();
+      const t = setTimeout(() => ac.abort(), 800);
+      try {
+        const res = await fetch(`http://${ip}:7125/printer/info`, { signal: ac.signal });
+        if (res.status === 200 || res.status === 401) {
+          let name = '';
+          if (res.status === 200) { try { const j = await res.json(); name = j?.result?.hostname || ''; } catch { /* */ } }
+          found.set('klipper:' + ip, { vendor: 'klipper', ip, name: name || 'Klipper printer', model: '', serial: '', port: 7125, source: 'moonraker' });
+        }
+      } catch { /* not a Moonraker host */ }
+      finally { clearTimeout(t); }
+    };
+    const CONC = 48;
+    const worker = async () => { while (idx < hosts.length && Date.now() < deadline) await probeOne(hosts[idx++]); };
+    await Promise.all(Array.from({ length: CONC }, worker));
+  };
   const sockets2 = [];
   const listen = (port) => new Promise((resolve) => {
     let s;
@@ -291,10 +324,15 @@ async function runDiscover(job) {
     s3.on('message', sniff);
     s3.bind(() => { try { s3.setBroadcast(true); } catch { /* */ } try { s3.send(q, 1900, '239.255.255.250'); s3.send(q, 2021, '239.255.255.250'); } catch { /* */ } });
   } catch { /* */ }
-  await new Promise((r) => setTimeout(r, windowMs));
+  // Run the SSDP listen window and the Klipper subnet probe together.
+  const deadline = Date.now() + windowMs;
+  await Promise.all([
+    new Promise((r) => setTimeout(r, windowMs)),
+    probeKlipper(deadline).catch(() => {})
+  ]);
   for (const s of sockets2) { try { s.close(); } catch { /* */ } }
   const devices = [...found.values()];
-  dbg('discover complete', { found: devices.length, window_ms: windowMs });
+  dbg('discover complete', { found: devices.length, bambu: devices.filter((d) => d.vendor === 'bambu').length, klipper: devices.filter((d) => d.vendor === 'klipper').length, window_ms: windowMs });
   return { ok: true, devices };
 }
 
