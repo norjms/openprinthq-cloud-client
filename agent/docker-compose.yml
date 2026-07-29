@@ -13,6 +13,10 @@ services:
     restart: unless-stopped
     env_file: .env
     network_mode: host
-    # Persist the connector's own key (mutual auth) across restarts.
+    environment:
+      # Persist the connector's own key on the volume below so trust-on-first-use
+      # pairing survives container recreates (without this the key regenerates
+      # and your instance rejects it until you Reset the connector).
+      OPHQ_CLIENT_KEY_FILE: /data/connector-key.pem
     volumes:
       - ./data:/data
