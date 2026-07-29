@@ -3,6 +3,8 @@
 <installer-gui-script minSpecVersion="2">
   <title>OpenPrintHQ Cloud Client</title>
   <organization>com.openprinthq</organization>
+  <!-- AGPL-3.0 license: the installer shows this and requires Agree to proceed. -->
+  <license file="LICENSE.txt" mime-type="text/plain"/>
   <domains enable_localSystem="true"/>
   <options customize="never" require-scripts="false" rootVolumeOnly="true"/>
   <volume-check>
