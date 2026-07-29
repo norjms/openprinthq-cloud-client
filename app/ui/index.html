@@ -125,6 +125,7 @@
           <button id="dashboard">Open dashboard</button>
           <button id="selftest">Run self-test</button>
           <button id="pubkey">Show connector key</button>
+          <button id="copykey">Copy connector key</button>
           <button id="logs">View logs</button>
           <button id="update">Check for updates</button>
         </div>
@@ -204,12 +205,22 @@
         showOut(out);
       }
 
+      let lastKey = "";
       async function showPubkey() {
         showOut("Reading connector key…");
         try {
           const key = await invoke("connector_pubkey");
-          showOut("Register this in Settings → Connectors → Key:\n\n" + key);
+          lastKey = key;
+          showOut("This connector auto-registers its key with your instance on first connect (nothing to paste). If you ever need it manually, use Copy key:\n\n" + key);
         } catch (e) { showOut("Could not read key: " + e); }
+      }
+      async function copyKey() {
+        try {
+          const key = lastKey || await invoke("connector_pubkey");
+          lastKey = key;
+          await navigator.clipboard.writeText(key);
+          showOut("Connector key copied to clipboard.\n\n" + key);
+        } catch (e) { showOut("Could not copy key: " + e); }
       }
 
       $("save").onclick = saveConfig;
@@ -218,6 +229,7 @@
       $("dashboard").onclick = () => invoke("open_dashboard");
       $("selftest").onclick = selfTest;
       $("pubkey").onclick = showPubkey;
+      $("copykey").onclick = copyKey;
       $("logs").onclick = viewLogs;
       $("update").onclick = checkUpdate;
       $("repo").onclick = () => invoke("open_external", { url: REPO });

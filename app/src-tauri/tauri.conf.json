@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "OpenPrintHQ Cloud Client",
-  "version": "0.0.3",
+  "version": "0.0.5",
   "identifier": "com.openprinthq.cloudclient",
   "build": {
     "frontendDist": "../ui"
@@ -27,10 +27,15 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["msi", "deb", "rpm", "app"],
+    "targets": [
+      "msi",
+      "deb",
+      "rpm",
+      "app"
+    ],
     "category": "Utility",
     "shortDescription": "OpenPrintHQ local connector",
-    "longDescription": "Connects a cloud-hosted OpenPrintHQ account to 3D printers on your local network — outbound-only, no port-forwarding.",
+    "longDescription": "Connects a cloud-hosted OpenPrintHQ account to 3D printers on your local network \u2014 outbound-only, no port-forwarding.",
     "publisher": "OpenPrintHQ",
     "homepage": "https://openprinthq.com",
     "icon": [
@@ -46,7 +51,9 @@
       "../../scripts": "scripts",
       "../../service": "service"
     },
-    "externalBin": ["binaries/ophq-node"],
+    "externalBin": [
+      "binaries/ophq-node"
+    ],
     "windows": {
       "wix": {
         "language": "en-US"

@@ -23,6 +23,7 @@
 // Dependency-free: uses only Node ≥ 20 built-ins (global fetch, streams).
 
 import net from 'node:net';
+import dgram from 'node:dgram';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 
@@ -137,7 +138,13 @@ function clientAuthHeaders() {
   if (!clientKey) return {};
   const ts = String(Date.now());
   const sig = crypto.sign('sha256', Buffer.from(`${CONFIG.token}.${ts}`), { key: clientKey, ...PSS }).toString('base64');
-  return { 'x-ophq-client-ts': ts, 'x-ophq-client-sig': sig };
+  // Present our public key too (base64 PEM, header-safe). On the FIRST connect
+  // with a valid token the server locks onto this key (trust-on-first-use), so
+  // the user never has to copy/paste it. Later connects still prove possession
+  // via the signature above; a different key is rejected until the server key
+  // is reset. Harmless to send every time.
+  const pub = clientPubPem ? Buffer.from(clientPubPem).toString('base64') : '';
+  return { 'x-ophq-client-ts': ts, 'x-ophq-client-sig': sig, 'x-ophq-client-pubkey': pub };
 }
 
 // ---- allow-list ----------------------------------------------------------
@@ -235,12 +242,69 @@ function openTcp(job) {
 function dataTcp(job) { const s = sockets.get(job.id); if (s && job.data) s.write(Buffer.from(job.data, 'base64')); }
 function closeTcp(job) { const s = sockets.get(job.id); if (s) { s.end(); sockets.delete(job.id); } }
 
+// ---- LAN printer discovery (SSDP) ---------------------------------------
+// Runs on THIS connector's own network — where the printers actually are. The
+// cloud engine can't see the LAN, so discovery has to happen here and the
+// results travel back up the tunnel. Listens for Bambu SSDP broadcasts (the
+// printers announce themselves) and also sends an active M-SEARCH.
+function parseSsdpHeaders(text) {
+  const h = {};
+  for (const line of text.split(/\r?\n/)) {
+    const i = line.indexOf(':');
+    if (i > 0) h[line.slice(0, i).trim().toLowerCase()] = line.slice(i + 1).trim();
+  }
+  return h;
+}
+async function runDiscover(job) {
+  const windowMs = Math.min(Math.max(Number(job.window_ms) || 4000, 1000), 12000);
+  const found = new Map();   // key -> device
+  const addBambu = (h, ip) => {
+    if (!ip) return;
+    found.set('bambu:' + ip, {
+      vendor: 'bambu', ip,
+      name: h['devname.bambu.com'] || h['dev-name'] || 'Bambu printer',
+      model: (h['devmodel.bambu.com'] || '').replace(/^3DPrinter-/i, '') || '',
+      serial: h['usn'] || '',
+      port: 8883, source: 'ssdp'
+    });
+  };
+  const sniff = (msg, rinfo) => {
+    const text = msg.toString('utf8');
+    if (/bambu|3dprinter|bambulab/i.test(text)) addBambu(parseSsdpHeaders(text), rinfo.address);
+  };
+  const sockets2 = [];
+  const listen = (port) => new Promise((resolve) => {
+    let s;
+    try { s = dgram.createSocket({ type: 'udp4', reuseAddr: true }); } catch { return resolve(); }
+    sockets2.push(s);
+    s.on('error', () => { try { s.close(); } catch { /* */ } });
+    s.on('message', sniff);
+    try { s.bind(port, () => { try { s.addMembership('239.255.255.250'); } catch { /* */ } resolve(); }); }
+    catch { resolve(); }
+  });
+  // Bambu printers broadcast SSDP NOTIFY to 239.255.255.250 on :1990 and :2021.
+  await Promise.all([listen(2021), listen(1990)]);
+  // Active M-SEARCH so anything that only answers on request replies now too.
+  try {
+    const q = Buffer.from('M-SEARCH * HTTP/1.1\r\nHOST:239.255.255.250:1900\r\nMAN:"ssdp:discover"\r\nMX:2\r\nST:ssdp:all\r\n\r\n');
+    const s3 = dgram.createSocket('udp4'); sockets2.push(s3);
+    s3.on('message', sniff);
+    s3.bind(() => { try { s3.setBroadcast(true); } catch { /* */ } try { s3.send(q, 1900, '239.255.255.250'); s3.send(q, 2021, '239.255.255.250'); } catch { /* */ } });
+  } catch { /* */ }
+  await new Promise((r) => setTimeout(r, windowMs));
+  for (const s of sockets2) { try { s.close(); } catch { /* */ } }
+  const devices = [...found.values()];
+  dbg('discover complete', { found: devices.length, window_ms: windowMs });
+  return { ok: true, devices };
+}
+
 async function handleJob(job) {
   dbg('job received', { id: job.id, kind: job.kind || 'http', host: job.host, port: job.port, scheme: job.scheme, method: job.method, path: job.path });
   if (!verifyCommand(job)) return;   // drop commands not signed by the control-plane
   if (job.kind === 'tcp-open') return openTcp(job);
   if (job.kind === 'tcp-data') return dataTcp(job);
   if (job.kind === 'tcp-close') return closeTcp(job);
+  if (job.kind === 'discover') { const r = await runDiscover(job); dbg('job result', { id: job.id, kind: 'discover', found: r.devices.length }); await post({ id: job.id, ...r }); return; }
   const result = (job.kind === 'tcp-probe') ? await runTcpProbe(job) : await runHttpJob(job);
   dbg('job result', { id: job.id, kind: job.kind || 'http', status: result.status, ok: result.ok, error: result.error });
   await post({ id: job.id, ...result });
