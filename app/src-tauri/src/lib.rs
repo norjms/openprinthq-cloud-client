@@ -498,6 +498,59 @@ async fn check_update() -> Result<UpdateInfo, String> {
     .map_err(|e| e.to_string())?
 }
 
+#[derive(Serialize)]
+pub struct ValidateResult {
+    ok: bool,
+    status: u16,
+    reason: String,
+}
+
+/// Onboarding pre-check: confirm the instance URL is reachable and the token is
+/// accepted, before saving. Opens the connector stream (Bearer token) and reads
+/// only the HTTP status. 200 = reachable + token accepted; 401 = reached but the
+/// token is invalid or the connector is paired to a different client; transport
+/// error = URL unreachable. Done in Rust (ureq) so it isn't CORS-blocked.
+#[tauri::command]
+async fn validate_connection(url: String, token: String) -> Result<ValidateResult, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let base = url.trim().trim_end_matches('/').to_string();
+        if base.is_empty() {
+            return ValidateResult { ok: false, status: 0, reason: "Enter your instance URL.".into() };
+        }
+        if token.trim().is_empty() {
+            return ValidateResult { ok: false, status: 0, reason: "Enter your connector token.".into() };
+        }
+        let endpoint = format!("{base}/api/connector/stream?name=validate");
+        match ureq::get(&endpoint)
+            .set("authorization", &format!("Bearer {}", token.trim()))
+            .set("accept", "text/event-stream")
+            .timeout(std::time::Duration::from_secs(10))
+            .call()
+        {
+            Ok(_) => ValidateResult {
+                ok: true,
+                status: 200,
+                reason: "Connected — your instance accepted this connector.".into(),
+            },
+            Err(ureq::Error::Status(code, _)) => {
+                let reason = if code == 401 {
+                    "Reached your instance, but the connector token was rejected. Check the token, or if this connector is already paired to another client, Reset it in Settings → Connectors.".into()
+                } else {
+                    format!("Reached your instance, but it returned HTTP {code}.")
+                };
+                ValidateResult { ok: false, status: code, reason }
+            }
+            Err(ureq::Error::Transport(t)) => ValidateResult {
+                ok: false,
+                status: 0,
+                reason: format!("Could not reach {base}. Check the URL and your connection. ({t})"),
+            },
+        }
+    })
+    .await
+    .map_err(|e| e.to_string())
+}
+
 /// Print this connector's public key (for Settings → Connectors → Key).
 #[tauri::command]
 async fn connector_pubkey(
@@ -597,7 +650,10 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
-            Some(vec![]),
+            // Login auto-start launches with --hidden so the app comes up quietly
+            // in the tray. A manual / installer launch (no --hidden) shows the
+            // window; see the first-run logic in setup().
+            Some(vec!["--hidden"]),
         ))
         .setup(|app| {
             let handle = app.handle().clone();
@@ -732,6 +788,23 @@ pub fn run() {
                 });
             }
 
+            // macOS: run as a menu-bar-only (accessory) app — no Dock icon.
+            // Windows/Linux get the same "tray only, no taskbar button" effect
+            // from the window's skipTaskbar setting in tauri.conf.json.
+            #[cfg(target_os = "macos")]
+            let _ = app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+
+            // Whether to show the window on launch:
+            //  - login auto-start passes --hidden -> stay in the tray, UNLESS
+            //    this is a first run with no token yet (then show so the user
+            //    can configure).
+            //  - a manual / installer launch (no --hidden) always shows.
+            let launched_hidden = std::env::args().any(|a| a == "--hidden");
+            let has_token = !load_config(&state.config_path).token.trim().is_empty();
+            if !launched_hidden || !has_token {
+                show_window(&handle);
+            }
+
             // If a platform service already runs the connector, monitor only;
             // otherwise supervise our own copy.
             if service_running() {
@@ -757,7 +830,8 @@ pub fn run() {
             app_version,
             open_external,
             get_logs,
-            check_update
+            check_update,
+            validate_connection
         ])
         .build(tauri::generate_context!())
         .expect("error while building OpenPrintHQ Cloud Client")
@@ -774,6 +848,11 @@ fn show_window(app: &AppHandle) {
     if let Some(win) = app.get_webview_window("main") {
         let _ = win.show();
         let _ = win.unminimize();
+        // Raise reliably to the front even for a menu-bar (accessory) app: a
+        // brief always-on-top toggle pulls it above other windows without
+        // permanently pinning it.
+        let _ = win.set_always_on_top(true);
         let _ = win.set_focus();
+        let _ = win.set_always_on_top(false);
     }
 }
