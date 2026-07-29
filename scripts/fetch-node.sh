@@ -29,10 +29,12 @@ trap 'rm -rf "$TMP"' EXIT
 PKG="node-${NODE_VERSION}-${PLAT}"
 URL="https://nodejs.org/dist/${NODE_VERSION}/${PKG}.tar.gz"
 echo "Downloading $URL"
-curl -fsSL "$URL" -o "$TMP/node.tar.gz"
+curl -fL --retry 3 --retry-delay 2 --connect-timeout 20 "$URL" -o "$TMP/node.tar.gz"
+[ -s "$TMP/node.tar.gz" ] || { echo "download failed or empty" >&2; exit 1; }
 tar -xzf "$TMP/node.tar.gz" -C "$TMP"
 
 DEST="$OUTDIR/ophq-node-${TRIPLE}"
 cp "$TMP/${PKG}/bin/node" "$DEST"
 chmod +x "$DEST"
+[ -x "$DEST" ] || { echo "sidecar not placed at $DEST" >&2; exit 1; }
 echo "Placed sidecar: $DEST"
