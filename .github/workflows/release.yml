@@ -52,6 +52,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Set version from tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          jq --arg v "${{ needs.version.outputs.version }}" '.version=$v' \
+            app/src-tauri/tauri.conf.json > tauri.conf.tmp
+          mv tauri.conf.tmp app/src-tauri/tauri.conf.json
+          grep '"version"' app/src-tauri/tauri.conf.json
+
+
       - uses: dtolnay/rust-toolchain@stable
 
       - uses: Swatinem/rust-cache@v2
@@ -102,6 +112,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Set version from tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          jq --arg v "${{ needs.version.outputs.version }}" '.version=$v' \
+            app/src-tauri/tauri.conf.json > tauri.conf.tmp
+          mv tauri.conf.tmp app/src-tauri/tauri.conf.json
+          grep '"version"' app/src-tauri/tauri.conf.json
+
+
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-apple-darwin,x86_64-apple-darwin
@@ -135,6 +155,16 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
+
+      - name: Set version from tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          jq --arg v "${{ needs.version.outputs.version }}" '.version=$v' \
+            app/src-tauri/tauri.conf.json > tauri.conf.tmp
+          mv tauri.conf.tmp app/src-tauri/tauri.conf.json
+          grep '"version"' app/src-tauri/tauri.conf.json
+
 
       - uses: dtolnay/rust-toolchain@stable
 
