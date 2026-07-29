@@ -43,6 +43,8 @@
         padding: 4px 10px; border-radius: 999px; font-size: 11px; font-weight: 600;
         background: var(--panel-2); color: var(--muted); border: 1px solid var(--border);
       }
+      .pill.flash { animation: pulse 0.6s ease; }
+      @keyframes pulse { 0% { transform: scale(1); } 30% { transform: scale(1.12); filter: brightness(1.4); } 100% { transform: scale(1); } }
       .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
       .pill.ok { color: var(--ok); } .pill.ok .dot { background: var(--ok); box-shadow: 0 0 6px var(--ok); }
       .pill.warn { color: var(--warn); } .pill.warn .dot { background: var(--warn); }
@@ -66,7 +68,11 @@
       }
       button:hover { border-color: var(--accent); }
       button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+      button:disabled { opacity: 0.45; cursor: default; border-color: var(--border); }
+      button:disabled:hover { border-color: var(--border); }
       .muted { color: var(--muted); }
+      .svcnote { display: none; margin-top: 8px; font-size: 11px; color: var(--warn); }
+      .svcnote.show { display: block; }
       details summary { cursor: pointer; color: var(--muted); font-size: 11px; margin-top: 6px; }
       .out {
         margin-top: 10px; background: #10131a; border: 1px solid var(--border); border-radius: 8px;
@@ -77,6 +83,22 @@
       footer { padding: 10px 16px 16px; color: var(--muted); font-size: 11px; display: flex; gap: 10px; align-items: center; }
       footer a { color: var(--accent); text-decoration: none; cursor: pointer; }
       .grow { flex: 1; }
+      /* ---- first-run wizard ---- */
+      #wizard { display: none; }
+      #wizard.show { display: block; }
+      #normal { display: none; }
+      #normal.show { display: block; }
+      .wtitle { font-size: 16px; font-weight: 700; margin: 2px 0 6px; }
+      .wlead { color: var(--muted); font-size: 12px; margin: 0 0 12px; }
+      .steps { display: flex; gap: 6px; margin-bottom: 12px; }
+      .stepdot { flex: 1; height: 4px; border-radius: 999px; background: var(--panel-2); }
+      .stepdot.on { background: var(--accent); }
+      .result { margin-top: 10px; padding: 10px; border-radius: 8px; font-size: 12px; display: none; }
+      .result.show { display: block; }
+      .result.ok { background: rgba(55,196,107,0.1); border: 1px solid rgba(55,196,107,0.4); color: var(--ok); }
+      .result.err { background: rgba(239,91,91,0.1); border: 1px solid rgba(239,91,91,0.4); color: var(--err); }
+      .result.busy { background: var(--panel-2); border: 1px solid var(--border); color: var(--muted); }
+      .link { color: var(--accent); cursor: pointer; text-decoration: none; }
     </style>
   </head>
   <body>
@@ -90,6 +112,50 @@
     </header>
 
     <main>
+      <!-- ===================== FIRST-RUN WIZARD ===================== -->
+      <div id="wizard">
+        <div class="card">
+          <div class="steps">
+            <div class="stepdot on" id="sd0"></div>
+            <div class="stepdot" id="sd1"></div>
+            <div class="stepdot" id="sd2"></div>
+          </div>
+
+          <!-- step 0: welcome -->
+          <div class="wstep" id="w0">
+            <div class="wtitle">Welcome 👋</div>
+            <p class="wlead">This app connects your local 3D printers to your cloud OpenPrintHQ account. It dials <b>out</b> only — no port-forwarding, nothing to open on your firewall. Let's get it connected.</p>
+            <div class="btns"><button class="primary" id="wnext0">Get started</button></div>
+          </div>
+
+          <!-- step 1: connection details -->
+          <div class="wstep" id="w1" style="display:none">
+            <div class="wtitle">Connect to your instance</div>
+            <p class="wlead">Enter your OpenPrintHQ address and a connector token. Create a token in your instance under <b>Settings → Connectors → New connector</b>.</p>
+            <label for="w_url">Your OpenPrintHQ instance URL</label>
+            <input id="w_url" placeholder="https://openprinthq.com" />
+            <label for="w_token">Connector token</label>
+            <input id="w_token" type="password" placeholder="paste your connector token" />
+            <label for="w_name">Connector name <span class="muted">(optional)</span></label>
+            <input id="w_name" placeholder="cloud-client" />
+            <div class="result" id="w_result"></div>
+            <div class="btns">
+              <button class="primary" id="wtest">Test connection</button>
+              <button id="wback1">Back</button>
+            </div>
+          </div>
+
+          <!-- step 2: done -->
+          <div class="wstep" id="w2" style="display:none">
+            <div class="wtitle">✓ Connected</div>
+            <p class="wlead">Your instance accepted this connector. Finish to save and start it — it'll keep running in the menu bar / tray. This connector pairs to your instance on first connect; nothing else to copy.</p>
+            <div class="btns"><button class="primary" id="wfinish">Finish &amp; start</button></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ===================== NORMAL UI ===================== -->
+      <div id="normal">
       <div class="card">
         <h2>Connection</h2>
         <label for="control_url">Your OpenPrintHQ instance URL</label>
@@ -117,6 +183,7 @@
           <button id="start">Start</button>
           <button id="stop">Stop</button>
         </div>
+        <div class="svcnote" id="svcnote">A background service is managing the connector, so Start/Stop here don't apply — control it from the service (Windows Services / launchd / systemd).</div>
       </div>
 
       <div class="card">
@@ -130,6 +197,7 @@
           <button id="update">Check for updates</button>
         </div>
         <div id="out" class="out"></div>
+      </div>
       </div>
     </main>
 
@@ -146,18 +214,37 @@
       const $ = (id) => document.getElementById(id);
       const REPO = "https://git.nnlink.org/OpenPrintHQ/openprinthq-cloud-client";
       const LATEST = REPO + "/releases";
-      const API_LATEST =
-        "https://git.nnlink.org/api/v1/repos/OpenPrintHQ/openprinthq-cloud-client/releases/latest";
 
       const FIELDS = ["control_url", "token", "name", "allow", "allow_ports", "test_printer", "signing_pubkey"];
 
+      // Last known status; optimistic updates merge into this.
+      let lastStatus = { running: false, connected: false, managed_by_service: false, message: "starting…" };
+
       function setPill(status) {
+        lastStatus = { ...lastStatus, ...status };
+        const s = lastStatus;
         const pill = $("pill"), t = $("pillText");
         pill.className = "pill";
-        if (status.managed_by_service) { pill.classList.add("ok"); t.textContent = "managed by service"; return; }
-        if (status.connected) { pill.classList.add("ok"); t.textContent = "connected"; return; }
-        if (status.running) { pill.classList.add("warn"); t.textContent = status.message || "connecting…"; return; }
-        pill.classList.add("err"); t.textContent = status.message || "stopped";
+        // flash on change
+        void pill.offsetWidth; pill.classList.add("flash");
+        setTimeout(() => pill.classList.remove("flash"), 600);
+        if (s.managed_by_service) { pill.classList.add("ok"); t.textContent = "managed by service"; }
+        else if (s.connected) { pill.classList.add("ok"); t.textContent = "connected"; }
+        else if (s.running) { pill.classList.add("warn"); t.textContent = s.message || "connecting…"; }
+        else { pill.classList.add("err"); t.textContent = s.message || "stopped"; }
+        updateButtons(s);
+      }
+
+      function updateButtons(s) {
+        const start = $("start"), stop = $("stop"), note = $("svcnote");
+        if (s.managed_by_service) {
+          start.disabled = true; stop.disabled = true; note.classList.add("show");
+        } else {
+          note.classList.remove("show");
+          const live = s.running || s.connected;
+          start.disabled = live;
+          stop.disabled = !live;
+        }
       }
 
       function showOut(text) { const o = $("out"); o.textContent = text; o.classList.add("show"); }
@@ -166,19 +253,34 @@
         const cfg = await invoke("get_config");
         for (const f of FIELDS) if (f in cfg) $(f).value = cfg[f] || "";
         $("debug").checked = !!cfg.debug;
+        return cfg;
       }
       async function saveConfig() {
         const config = {};
         for (const f of FIELDS) config[f] = $(f).value.trim();
         config.debug = $("debug").checked;
         await invoke("save_config", { config });
+        setPill({ running: true, connected: false, message: "starting…" });
         showOut("Saved. Connecting…");
+      }
+
+      // ---- Start / Stop with immediate feedback ----
+      async function onStart() {
+        if ($("start").disabled) return;
+        setPill({ running: true, connected: false, message: "starting…" });
+        showOut("Starting connector…");
+        try { await invoke("start_connector"); } catch (e) { showOut("Start failed: " + e); }
+      }
+      async function onStop() {
+        if ($("stop").disabled) return;
+        setPill({ running: false, connected: false, message: "stopped" });
+        showOut("Connector stopped.");
+        try { await invoke("stop_connector"); } catch (e) { showOut("Stop failed: " + e); }
       }
 
       async function checkUpdate() {
         showOut("Checking for updates…");
         try {
-          // Done in the Rust backend (not window.fetch) so it isn't CORS-blocked.
           const u = await invoke("check_update");
           if (!u.up_to_date && u.latest) {
             showOut(`Update available: ${u.latest} (you have ${u.current}).\nOpening the releases page…`);
@@ -223,9 +325,39 @@
         } catch (e) { showOut("Could not copy key: " + e); }
       }
 
+      // ---- Wizard ----
+      function wshow(step) {
+        for (let i = 0; i < 3; i++) {
+          $("w" + i).style.display = i === step ? "block" : "none";
+          $("sd" + i).classList.toggle("on", i <= step);
+        }
+      }
+      function showWizard() { $("wizard").classList.add("show"); $("normal").classList.remove("show"); wshow(0); }
+      function showNormal() { $("wizard").classList.remove("show"); $("normal").classList.add("show"); }
+
+      let validated = false;
+      async function wtest() {
+        const url = $("w_url").value.trim(), token = $("w_token").value.trim();
+        const r = $("w_result");
+        r.className = "result show busy"; r.textContent = "Testing connection…";
+        try {
+          const res = await invoke("validate_connection", { url, token });
+          if (res.ok) { r.className = "result show ok"; r.textContent = "✓ " + res.reason; validated = true; wshow(2); }
+          else { r.className = "result show err"; r.textContent = "✕ " + res.reason; validated = false; }
+        } catch (e) { r.className = "result show err"; r.textContent = "✕ " + e; validated = false; }
+      }
+      async function wfinish() {
+        // Copy wizard values into the real fields and save.
+        $("control_url").value = $("w_url").value.trim();
+        $("token").value = $("w_token").value.trim();
+        $("name").value = $("w_name").value.trim() || "cloud-client";
+        await saveConfig();
+        showNormal();
+      }
+
       $("save").onclick = saveConfig;
-      $("start").onclick = () => invoke("start_connector");
-      $("stop").onclick = () => invoke("stop_connector");
+      $("start").onclick = onStart;
+      $("stop").onclick = onStop;
       $("dashboard").onclick = () => invoke("open_dashboard");
       $("selftest").onclick = selfTest;
       $("pubkey").onclick = showPubkey;
@@ -234,13 +366,24 @@
       $("update").onclick = checkUpdate;
       $("repo").onclick = () => invoke("open_external", { url: REPO });
       $("releases").onclick = () => invoke("open_external", { url: LATEST });
+      $("wnext0").onclick = () => wshow(1);
+      $("wback1").onclick = () => wshow(0);
+      $("wtest").onclick = wtest;
+      $("wfinish").onclick = wfinish;
 
       evt.listen("connector-status", (e) => setPill(e.payload));
-      evt.listen("open-updates", checkUpdate);
+      evt.listen("open-updates", () => { showNormal(); checkUpdate(); });
 
       (async () => {
         $("ver").textContent = await invoke("app_version");
-        await loadConfig();
+        const cfg = await loadConfig();
+        // First run (no token yet) -> guided wizard; otherwise the normal UI.
+        if (!cfg || !String(cfg.token || "").trim()) {
+          $("w_url").value = cfg && cfg.control_url ? cfg.control_url : "https://";
+          showWizard();
+        } else {
+          showNormal();
+        }
         setPill(await invoke("get_status"));
       })();
     </script>

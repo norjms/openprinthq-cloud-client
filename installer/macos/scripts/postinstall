@@ -28,4 +28,12 @@ if [ -x "$NODE" ] && [ -f "$SELFTEST" ]; then
   "$NODE" "$SELFTEST" || true
 fi
 
+# Launch the app in the installing user's GUI session so it opens to the front
+# for first-run configuration (postinstall runs as root; asuser targets the
+# logged-in console user). Best-effort — never fail the install over this.
+CONSOLE_UID="$(stat -f %u /dev/console 2>/dev/null || echo 0)"
+if [ -d "$APP" ] && [ "$CONSOLE_UID" != "0" ]; then
+  launchctl asuser "$CONSOLE_UID" open -a "$APP" 2>/dev/null || true
+fi
+
 exit 0
