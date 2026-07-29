@@ -25,8 +25,14 @@ use tauri_plugin_opener::OpenerExt;
 use tauri_plugin_shell::process::{CommandChild, CommandEvent};
 use tauri_plugin_shell::ShellExt;
 
+// The releases LIST endpoint (newest first), NOT /releases/latest: Gitea's
+// `/latest` only returns a STABLE release and 404s when every release is a
+// prerelease (which ours are, during beta) — that 404 was surfacing as
+// "Update check failed". The list endpoint returns prereleases too.
 pub const REPO_API: &str =
-    "https://git.nnlink.org/api/v1/repos/OpenPrintHQ/openprinthq-cloud-client/releases/latest";
+    "https://git.nnlink.org/api/v1/repos/OpenPrintHQ/openprinthq-cloud-client/releases?limit=10";
+pub const RELEASES_URL: &str =
+    "https://git.nnlink.org/OpenPrintHQ/openprinthq-cloud-client/releases";
 
 /// Set when the user chooses Quit, so the tray-keepalive doesn't veto the exit.
 static QUITTING: AtomicBool = AtomicBool::new(false);
@@ -456,7 +462,6 @@ pub struct UpdateInfo {
 async fn check_update() -> Result<UpdateInfo, String> {
     tauri::async_runtime::spawn_blocking(|| {
         let current = env!("CARGO_PKG_VERSION").to_string();
-        let releases = "https://git.nnlink.org/OpenPrintHQ/openprinthq-cloud-client/releases";
         let json: serde_json::Value = ureq::get(REPO_API)
             .set("accept", "application/json")
             .timeout(std::time::Duration::from_secs(12))
@@ -464,16 +469,22 @@ async fn check_update() -> Result<UpdateInfo, String> {
             .map_err(|e| format!("network error: {e}"))?
             .into_json()
             .map_err(|e| format!("bad response: {e}"))?;
-        let latest = json
+        // Newest non-draft release (prereleases included).
+        let rel = json
+            .as_array()
+            .and_then(|arr| arr.iter().find(|r| !r.get("draft").and_then(|v| v.as_bool()).unwrap_or(false)))
+            .cloned()
+            .unwrap_or(serde_json::Value::Null);
+        let latest = rel
             .get("tag_name")
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .trim_start_matches('v')
             .to_string();
-        let url = json
+        let url = rel
             .get("html_url")
             .and_then(|v| v.as_str())
-            .unwrap_or(releases)
+            .unwrap_or(RELEASES_URL)
             .to_string();
         let up_to_date = latest.is_empty() || latest == current;
         Ok(UpdateInfo {
@@ -638,9 +649,17 @@ pub fn run() {
                 ],
             )?;
 
-            // Dedicated tray/menu-bar mark (the OpenPrintHQ logo). Rendered as a
-            // template on macOS so it adapts to the light/dark menu bar.
-            let tray_icon = match tauri::image::Image::from_bytes(include_bytes!("../icons/tray.png")) {
+            // Dedicated tray/menu-bar mark (the OpenPrintHQ logo). On macOS the
+            // menu bar wants a monochrome template that adapts to light/dark; on
+            // Windows/Linux the tray sits on a dark taskbar, so we use the
+            // solid-white-background mark (matches the app icon) for visibility.
+            #[cfg(target_os = "macos")]
+            let (tray_bytes, as_template): (&[u8], bool) =
+                (include_bytes!("../icons/tray.png").as_slice(), true);
+            #[cfg(not(target_os = "macos"))]
+            let (tray_bytes, as_template): (&[u8], bool) =
+                (include_bytes!("../icons/tray-solid.png").as_slice(), false);
+            let tray_icon = match tauri::image::Image::from_bytes(tray_bytes) {
                 Ok(img) => img,
                 Err(_) => app
                     .default_window_icon()
@@ -649,7 +668,7 @@ pub fn run() {
             };
             let _tray = TrayIconBuilder::with_id("main")
                 .icon(tray_icon)
-                .icon_as_template(true)
+                .icon_as_template(as_template)
                 .tooltip("OpenPrintHQ Cloud Client")
                 .menu(&menu)
                 .show_menu_on_left_click(false)
