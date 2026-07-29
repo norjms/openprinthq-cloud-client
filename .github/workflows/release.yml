@@ -1,0 +1,264 @@
+# OpenPrintHQ Cloud Client - release on a version tag.
+#
+# Builds every installer on GitHub-hosted runners (free and unlimited for
+# public repositories), publishes the GitHub Release and attaches all assets.
+#
+#   git tag v0.0.8 && git push origin v0.0.8
+#
+# macOS is built natively on an Apple-Silicon runner as a universal binary,
+# so no local Mac has to be awake to cut a release.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to build, without the leading v (e.g. 0.0.8)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  version:
+    name: Resolve version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      tag: ${{ steps.v.outputs.tag }}
+    steps:
+      - id: v
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            V="${{ inputs.version }}"
+          else
+            V="${GITHUB_REF_NAME#v}"
+          fi
+          echo "version=${V}" >> "$GITHUB_OUTPUT"
+          echo "tag=v${V}" >> "$GITHUB_OUTPUT"
+          echo "Building version ${V}"
+
+  windows:
+    name: Windows (.msi)
+    needs: version
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: app/src-tauri
+
+      - name: Install tauri-cli
+        run: cargo install tauri-cli --version "^2.0" --locked
+
+      - name: Fetch bundled Node sidecar
+        shell: pwsh
+        run: powershell -ExecutionPolicy Bypass -File scripts/fetch-node.ps1 -Triple x86_64-pc-windows-msvc -OutDir app/src-tauri/binaries
+
+      - name: Build MSI
+        working-directory: app
+        run: cargo tauri build --bundles msi
+
+      - name: Sign MSI
+        shell: pwsh
+        env:
+          CERT_B64: ${{ secrets.WINDOWS_CERT_PFX_BASE64 }}
+          CERT_PASS: ${{ secrets.WINDOWS_CERT_PASSWORD }}
+        run: |
+          if (-not $env:CERT_B64) {
+            Write-Host "::warning::No WINDOWS_CERT_PFX_BASE64 secret set - shipping an UNSIGNED MSI."
+            exit 0
+          }
+          $pfx = Join-Path $env:RUNNER_TEMP "ophq-codesign.pfx"
+          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:CERT_B64))
+          $signtool = Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin\*\x64\signtool.exe" -ErrorAction SilentlyContinue | Select-Object -Last 1
+          if (-not $signtool) { throw "signtool.exe not found" }
+          $msi = Get-ChildItem app/src-tauri/target/release/bundle/msi/*.msi | Select-Object -First 1
+          & $signtool.FullName sign /f $pfx /p $env:CERT_PASS /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 $msi.FullName
+          if ($LASTEXITCODE -ne 0) { throw "signtool failed" }
+          Remove-Item $pfx -Force
+          Write-Host "Signed $($msi.Name)"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-windows
+          path: app/src-tauri/target/release/bundle/msi/*.msi
+          if-no-files-found: error
+
+  macos:
+    name: macOS (.pkg, universal)
+    needs: version
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: app/src-tauri
+
+      - name: Build .app and assemble .pkg
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+          TARGET: universal-apple-darwin
+        run: ./scripts/build-macos.sh
+
+      - name: Collect
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          cp OpenPrintHQ-Cloud-Client-*-macos.pkg dist/
+          ls -la dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-macos
+          path: dist/*.pkg
+          if-no-files-found: error
+
+  linux:
+    name: Linux (.deb / .rpm)
+    needs: version
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: app/src-tauri
+
+      - name: Install build dependencies
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \
+            librsvg2-dev build-essential curl wget file libssl-dev libxdo-dev \
+            pkg-config libsoup-3.0-dev rpm
+
+      - name: Install tauri-cli
+        run: cargo install tauri-cli --version "^2.0" --locked
+
+      - name: Fetch bundled Node sidecar
+        run: bash scripts/fetch-node.sh x86_64-unknown-linux-gnu app/src-tauri/binaries
+
+      - name: Build deb + rpm
+        working-directory: app
+        run: cargo tauri build --bundles deb,rpm
+
+      - name: Collect
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          find app/src-tauri/target/release/bundle -type f \
+            \( -name '*.deb' -o -name '*.rpm' \) -exec cp {} dist/ \;
+          ls -la dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-linux
+          path: dist/*
+          if-no-files-found: error
+
+  docker:
+    name: Connector image (GHCR, multi-arch)
+    needs: version
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push multi-arch image
+        uses: docker/build-push-action@v6
+        with:
+          context: agent
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/openprinthq-connector:${{ needs.version.outputs.version }}
+            ghcr.io/${{ github.repository_owner }}/openprinthq-connector:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # Kept for continuity: the web app's Docker instructions still offer a
+      # loadable tarball. Remove once those point at GHCR.
+      - name: Export amd64 tarball asset
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          docker buildx build --platform linux/amd64 --load \
+            -t openprinthq/connector:${{ needs.version.outputs.version }} agent
+          docker save openprinthq/connector:${{ needs.version.outputs.version }} \
+            | gzip > dist/openprinthq-connector-docker.tar.gz
+          ls -la dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-docker
+          path: dist/*
+          if-no-files-found: error
+
+  release:
+    name: Publish release
+    needs: [version, windows, macos, linux, docker]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: assets
+          pattern: dist-*
+          merge-multiple: true
+
+      - name: List assets
+        run: ls -la assets
+
+      - name: Publish
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.version.outputs.tag }}
+          name: OpenPrintHQ Cloud Client ${{ needs.version.outputs.version }}
+          draft: false
+          prerelease: false
+          fail_on_unmatched_files: true
+          files: assets/*
+          body: |
+            OpenPrintHQ Cloud Client ${{ needs.version.outputs.version }}
+
+            **Installers**
+            - Windows: `.msi`
+            - macOS: `.pkg` (universal - Apple Silicon and Intel)
+            - Linux: `.deb` / `.rpm`
+
+            **Docker**
+
+                docker pull ghcr.io/${{ github.repository_owner }}/openprinthq-connector:${{ needs.version.outputs.version }}
+
+            A loadable image tarball is also attached.
