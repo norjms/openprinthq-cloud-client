@@ -53,7 +53,9 @@
       "../../service": "service"
     },
     "externalBin": [
-      "binaries/ophq-node"
+      "binaries/ophq-node",
+      "binaries/go2rtc",
+      "binaries/ffmpeg"
     ],
     "windows": {
       "wix": {
