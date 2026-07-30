@@ -27,6 +27,7 @@ import dgram from 'node:dgram';
 import os from 'node:os';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
+import { registerBambuStream, localFrameUrl, localMjpegUrl, bambuSupportsRtsp } from './camera.js';
 
 function readPubKey() {
   const inline = process.env.OPHQ_SIGNING_PUBKEY;
@@ -344,6 +345,40 @@ async function runDiscover(job) {
   return { ok: true, devices };
 }
 
+// ---- camera relay (agent-local; see camera.js for architecture credit) ----
+// Register a Bambu RTSPS stream in the local go2rtc so frames can be fetched.
+async function runCameraRegister(job) {
+  const { vendor, ip, access_code, model, name } = job;
+  try {
+    if (vendor === 'bambu') {
+      if (!bambuSupportsRtsp(model)) return { ok: false, error: 'model has no RTSPS camera (A1/P1 chamber-image not supported)' };
+      const stream = await registerBambuStream({ name: name || ('p' + (job.printer_id || 'x')), ip, accessCode: access_code });
+      return { ok: true, stream };
+    }
+    // Klipper/other: nothing to register — frames are fetched from the webcam URL
+    // directly via the HTTP relay.
+    return { ok: true, stream: null };
+  } catch (e) { return { ok: false, error: e.message || 'camera register failed' }; }
+}
+
+// Fetch one JPEG frame locally and relay it up. For Bambu, from the local
+// go2rtc single-frame endpoint; for Klipper, from the webcam snapshot URL.
+async function runCameraFrame(job) {
+  const { vendor, name, snapshot_url } = job;
+  let url;
+  if (vendor === 'bambu') url = localFrameUrl(name || ('p' + (job.printer_id || 'x')));
+  else url = snapshot_url; // klipper/external: absolute local webcam snapshot URL
+  if (!url) return { status: 502, error: 'no camera url' };
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), 8000);
+  try {
+    const res = await fetch(url, { signal: ctrl.signal });
+    const buf = Buffer.from(await res.arrayBuffer());
+    return { status: res.status, headers: { 'content-type': res.headers.get('content-type') || 'image/jpeg' }, body: buf.toString('base64') };
+  } catch (e) { return { status: 502, error: (e && e.name === 'AbortError') ? 'timeout' : (e?.message || 'frame fetch failed') }; }
+  finally { clearTimeout(t); }
+}
+
 async function handleJob(job) {
   dbg('job received', { id: job.id, kind: job.kind || 'http', host: job.host, port: job.port, scheme: job.scheme, method: job.method, path: job.path });
   if (!verifyCommand(job)) return;   // drop commands not signed by the control-plane
@@ -351,6 +386,8 @@ async function handleJob(job) {
   if (job.kind === 'tcp-data') return dataTcp(job);
   if (job.kind === 'tcp-close') return closeTcp(job);
   if (job.kind === 'discover') { const r = await runDiscover(job); dbg('job result', { id: job.id, kind: 'discover', found: r.devices.length }); await post({ id: job.id, ...r }); return; }
+  if (job.kind === 'camera-register') { const r = await runCameraRegister(job); await post({ id: job.id, ...r }); return; }
+  if (job.kind === 'camera-frame') { const r = await runCameraFrame(job); await post({ id: job.id, ...r }); return; }
   const result = (job.kind === 'tcp-probe') ? await runTcpProbe(job) : await runHttpJob(job);
   dbg('job result', { id: job.id, kind: job.kind || 'http', status: result.status, ok: result.ok, error: result.error });
   await post({ id: job.id, ...result });
