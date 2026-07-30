@@ -30,9 +30,9 @@ use tauri_plugin_shell::ShellExt;
 // prerelease (which ours are, during beta) — that 404 was surfacing as
 // "Update check failed". The list endpoint returns prereleases too.
 pub const REPO_API: &str =
-    "https://git.nnlink.org/api/v1/repos/OpenPrintHQ/openprinthq-cloud-client/releases?limit=10";
+    "https://api.github.com/repos/norjms/openprinthq-cloud-client/releases?per_page=10";
 pub const RELEASES_URL: &str =
-    "https://git.nnlink.org/OpenPrintHQ/openprinthq-cloud-client/releases";
+    "https://github.com/norjms/openprinthq-cloud-client/releases";
 
 /// Set when the user chooses Quit, so the tray-keepalive doesn't veto the exit.
 static QUITTING: AtomicBool = AtomicBool::new(false);
@@ -482,7 +482,11 @@ async fn check_update() -> Result<UpdateInfo, String> {
     tauri::async_runtime::spawn_blocking(|| {
         let current = env!("CARGO_PKG_VERSION").to_string();
         let json: serde_json::Value = ureq::get(REPO_API)
-            .set("accept", "application/json")
+            .set("accept", "application/vnd.github+json")
+            // GitHub's API rejects requests without a User-Agent (HTTP 403),
+            // so this header is required, not optional.
+            .set("user-agent", concat!("openprinthq-cloud-client/", env!("CARGO_PKG_VERSION")))
+            .set("x-github-api-version", "2022-11-28")
             .timeout(std::time::Duration::from_secs(12))
             .call()
             .map_err(|e| format!("network error: {e}"))?
