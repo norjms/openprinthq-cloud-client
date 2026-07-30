@@ -162,12 +162,31 @@ fn dir_writable(dir: &PathBuf) -> bool {
 
 fn resolve_config_dir(app: &AppHandle) -> PathBuf {
     let m = machine_dir();
+    let user = app.path().app_config_dir().ok();
+
+    // READ path must not depend on WRITE access. A tray app running as the
+    // logged-in user often cannot write-probe the machine dir (SYSTEM-owned
+    // after a service/elevated install), which previously made it silently
+    // fall back to an empty user dir and show blank settings even though a
+    // populated config already existed in the machine dir (issue #3).
+    // So: if a config.json already exists somewhere, always read from there.
+    if m.join("config.json").exists() {
+        return m;
+    }
+    if let Some(ref u) = user {
+        if u.join("config.json").exists() {
+            return u.clone();
+        }
+    }
+
+    // No config yet (fresh install): choose the most durable writable dir,
+    // preferring the machine-wide dir so a later service shares it.
     if dir_writable(&m) {
         return m;
     }
-    if let Ok(user) = app.path().app_config_dir() {
-        let _ = std::fs::create_dir_all(&user);
-        return user;
+    if let Some(u) = user {
+        let _ = std::fs::create_dir_all(&u);
+        return u;
     }
     m
 }
