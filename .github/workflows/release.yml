@@ -75,6 +75,10 @@ jobs:
         shell: pwsh
         run: powershell -ExecutionPolicy Bypass -File scripts/fetch-node.ps1 -Triple x86_64-pc-windows-msvc -OutDir app/src-tauri/binaries
 
+      - name: Fetch camera sidecars (go2rtc + ffmpeg)
+        shell: pwsh
+        run: powershell -ExecutionPolicy Bypass -File scripts/fetch-camera-tools.ps1 -Triple x86_64-pc-windows-msvc -OutDir app/src-tauri/binaries
+
       - name: Build MSI
         working-directory: app
         run: cargo tauri build --bundles msi
