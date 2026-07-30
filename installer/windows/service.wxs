@@ -40,6 +40,15 @@
       ExeCommand="powershell.exe -ExecutionPolicy Bypass -WindowStyle Hidden -File &quot;[INSTALLDIR]scripts\outbound-allow.ps1&quot; -Program &quot;[INSTALLDIR]ophq-node.exe&quot;"
       Execute="deferred" Impersonate="no" Return="ignore" />
 
+    <!-- Show status text while the deferred CustomActions run, so the
+         progress bar is not silent/frozen-looking during service + firewall
+         setup (issue #2). -->
+    <UI>
+      <ProgressText Action="OphqInstallSvc">Configuring the OpenPrintHQ connector service...</ProgressText>
+      <ProgressText Action="OphqUninstallSvc">Removing the OpenPrintHQ connector service...</ProgressText>
+      <ProgressText Action="OphqOutboundFw">Adding an outbound firewall rule for the connector...</ProgressText>
+    </UI>
+
     <InstallExecuteSequence>
       <Custom Action="OphqOutboundFw" After="InstallFiles">NOT Installed</Custom>
       <Custom Action="OphqInstallSvc" After="OphqOutboundFw">NOT Installed</Custom>

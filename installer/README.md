@@ -35,3 +35,20 @@ Unsigned for 0.0.1 (an Apple Developer ID is tracked in the backlog).
 `deb`/`rpm` come straight from the Tauri bundler. The systemd unit in
 `service/systemd/` runs the connector headlessly; the deb declares a dependency
 on `nodejs (>= 20)`.
+
+## Troubleshooting a slow or stuck Windows install (issue #2)
+
+The Windows MSI writes a bundled Node runtime (~80 MB) plus resources, and — when
+the boot-service option is enabled — runs a couple of short elevated setup steps.
+On slower disks the progress bar can look stuck even though it is working.
+
+To install with a full, timestamped log you can inspect (or hand to support):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\install-with-log.ps1 -Msi .\OpenPrintHQ_x64.msi
+```
+
+The log path is printed at the start; tail it live in another window with
+`Get-Content -Wait <logpath>`. Add `-Quiet` for an unattended install or
+`-Uninstall` to remove with the same logging. Exit code `3010` means success with
+a reboot required.
