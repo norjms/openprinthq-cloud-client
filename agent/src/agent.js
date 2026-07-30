@@ -275,13 +275,21 @@ async function runDiscover(job) {
   };
   // Klipper/Moonraker printers don't broadcast; probe the LAN for :7125.
   const probeKlipper = async (deadline) => {
-    const nets = os.networkInterfaces();
     const bases = new Set();
-    for (const list of Object.values(nets)) {
-      for (const ni of list || []) {
-        if (ni && ni.family === 'IPv4' && !ni.internal) {
-          const p = ni.address.split('.');
-          if (p.length === 4) bases.add(p.slice(0, 3).join('.'));  // /24
+    // If the job names a subnet (CIDR /24..'/32'), scan ONLY that; else fall back
+    // to this host's own interfaces (all /24s).
+    const sub = (job.subnet || '').toString().trim();
+    const m = sub.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.\d{1,3}\/(\d{1,2})$/);
+    if (m && Number(m[4]) >= 24 && Number(m[4]) <= 32) {
+      bases.add(`${m[1]}.${m[2]}.${m[3]}`);   // /24 base; caps a scan at 254 hosts
+    } else {
+      const nets = os.networkInterfaces();
+      for (const list of Object.values(nets)) {
+        for (const ni of list || []) {
+          if (ni && ni.family === 'IPv4' && !ni.internal) {
+            const p = ni.address.split('.');
+            if (p.length === 4) bases.add(p.slice(0, 3).join('.'));  // /24
+          }
         }
       }
     }
@@ -348,9 +356,28 @@ async function handleJob(job) {
   await post({ id: job.id, ...result });
 }
 
+// Compute this host's LAN /24 CIDRs from its real interfaces. With
+// network_mode: host (the documented deploy), os.networkInterfaces() reports the
+// Docker HOST's interfaces, so this is the host's subnet — what we want to scan.
+function hostCidrs() {
+  const nets = os.networkInterfaces();
+  const out = new Set();
+  for (const list of Object.values(nets)) {
+    for (const ni of list || []) {
+      if (ni && ni.family === 'IPv4' && !ni.internal) {
+        const p = ni.address.split('.');
+        if (p.length === 4) out.add(p.slice(0, 3).join('.') + '.0/24');
+      }
+    }
+  }
+  return [...out];
+}
+// The single best-guess host CIDR to report (first non-internal /24).
+function primaryHostCidr() { return hostCidrs()[0] || ''; }
+
 // ---- SSE stream consumer -------------------------------------------------
 async function connectOnce() {
-  const url = `${CONFIG.controlUrl}/api/connector/stream?name=${encodeURIComponent(CONFIG.name)}`;
+  const url = `${CONFIG.controlUrl}/api/connector/stream?name=${encodeURIComponent(CONFIG.name)}&host_cidr=${encodeURIComponent(primaryHostCidr())}`;
   const ac = new AbortController();
   let idle = setTimeout(() => ac.abort(), CONFIG.streamTimeoutMs);
   const bump = () => { clearTimeout(idle); idle = setTimeout(() => ac.abort(), CONFIG.streamTimeoutMs); };
