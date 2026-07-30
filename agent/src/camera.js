@@ -51,9 +51,14 @@ export async function ensureGo2rtc() {
   if (go2rtcStarting) return go2rtcStarting;
   go2rtcStarting = (async () => {
     try {
-      go2rtcProc = spawn('go2rtc', ['-config', '{api: {listen: "127.0.0.1:1984"}}'], {
-        stdio: 'ignore', detached: false
-      });
+      const go2rtcBin = process.env.OPHQ_GO2RTC_BIN || 'go2rtc';
+      // Point go2rtc at the bundled ffmpeg (RTSPS->MJPEG transcode) when present,
+      // and bind its API to localhost only.
+      const ffmpegBin = process.env.OPHQ_FFMPEG_BIN;
+      const cfg = ffmpegBin
+        ? `{api: {listen: "127.0.0.1:1984"}, ffmpeg: {bin: ${JSON.stringify(ffmpegBin)}}}`
+        : '{api: {listen: "127.0.0.1:1984"}}';
+      go2rtcProc = spawn(go2rtcBin, ['-config', cfg], { stdio: 'ignore', detached: false });
       go2rtcProc.on('exit', (code) => { log('go2rtc exited', code); go2rtcProc = null; });
       // wait up to ~5s for it to come up
       for (let i = 0; i < 25; i++) {
@@ -63,7 +68,7 @@ export async function ensureGo2rtc() {
       log('go2rtc did not become ready');
       return false;
     } catch (e) {
-      log('go2rtc spawn failed (is it installed?):', e.message);
+      log('go2rtc spawn failed (bundled sidecar missing?):', e.message);
       return false;
     } finally { go2rtcStarting = null; }
   })();
