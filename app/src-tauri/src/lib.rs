@@ -324,7 +324,24 @@ async fn run_agent_once(app: &AppHandle, st: &Arc<AppState>) -> Result<(), Strin
     }
 
     let script = agent_script(app)?;
-    let env = agent_env(&cfg, &st.key_path);
+    let mut env = agent_env(&cfg, &st.key_path);
+
+    // Camera relay (OctoEverywhere-style): tell the agent where the bundled
+    // go2rtc / ffmpeg sidecars live so it can hold the printer camera locally
+    // and relay frames up. Sidecars are installed next to the app executable.
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(bin_dir) = exe.parent() {
+            let ext = if cfg!(windows) { ".exe" } else { "" };
+            let go2rtc = bin_dir.join(format!("go2rtc{}", ext));
+            let ffmpeg = bin_dir.join(format!("ffmpeg{}", ext));
+            if go2rtc.exists() {
+                env.insert("OPHQ_GO2RTC_BIN".into(), go2rtc.to_string_lossy().to_string());
+            }
+            if ffmpeg.exists() {
+                env.insert("OPHQ_FFMPEG_BIN".into(), ffmpeg.to_string_lossy().to_string());
+            }
+        }
+    }
 
     let (mut rx, child) = app
         .shell()
