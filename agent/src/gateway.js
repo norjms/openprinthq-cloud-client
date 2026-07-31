@@ -91,9 +91,9 @@ function bridgeTcpOverWs(ws, target, port) {
 }
 
 // ---- the gateway server --------------------------------------------------
-function startGateway({ port, gatewaySecretRef, cameraFrameUrl, log }) {
+function startGateway({ port, gatewaySecretRef, cameraFrameUrl, verifyRawToken, log }) {
   const secret = () => (typeof gatewaySecretRef === 'function' ? gatewaySecretRef() : gatewaySecretRef);
-  const server = http.createServer((req, res) => {
+  const httpServer = http.createServer((req, res) => {
     // CORS: the browser app (openprinthq.com) calls us cross-origin.
     res.setHeader('access-control-allow-origin', '*');
     res.setHeader('access-control-allow-headers', 'authorization, content-type');
@@ -136,7 +136,7 @@ function startGateway({ port, gatewaySecretRef, cameraFrameUrl, log }) {
   });
 
   // WebSocket upgrades: Moonraker /p/:id/moonraker/websocket, and /p/:id/tcp/:port
-  server.on('upgrade', (req, socket, head) => {
+  httpServer.on('upgrade', (req, socket, head) => {
     const u = new URL(req.url, 'http://gateway.local');
     const token = u.searchParams.get('t');
     const claims = verifyBrowserToken(token, secret());
@@ -153,111 +153,63 @@ function startGateway({ port, gatewaySecretRef, cameraFrameUrl, log }) {
     socket.write('HTTP/1.1 404 Not Found\r\n\r\n'); socket.destroy();
   });
 
-  server.on('error', (e) => log && log('gateway server error:', e.message));
-  server.listen(port, '0.0.0.0', () => log && log(`gateway listening on 0.0.0.0:${port} (forward this port on your router for remote access)`));
-  return server;
-}
-
-
-// ---- authenticated raw TCP passthrough (for the engine, server-to-server) ---
-// The cloud engine (not a browser) reaches a printer's raw TCP port through the
-// gateway. It opens a connection and sends a single line preamble:
-//     OPHQ1 <token> <printerId> <targetPort>\n
-// We verify the token, look up the printer's LAN ip, and splice to ip:targetPort.
-// Bambu MQTT is TLS end-to-end (cert pinned to the printer); we only forward
-// bytes, so the engine's TLS terminates at the printer as normal.
-function startTcpPassthrough({ port, gatewaySecretRef, verify, log }) {
-  const server = net.createServer((sock) => {
+  // ---- single-port front door: raw engine tunnel vs HTTP/WS ----------------
+  // We own the raw socket FIRST (a net.Server), peek the first bytes, and route:
+  //   - "OPHQ1 <token> <printerId> <targetPort>\n"  -> raw splice to the printer
+  //     (TLS end-to-end: we only prepend a plaintext routing line; the engine's
+  //     ClientHello and all subsequent bytes are forwarded untouched).
+  //   - anything else                                -> hand to the HTTP server,
+  //     which parses it as a normal Moonraker/camera request or a WS upgrade.
+  // This is why only ONE port needs forwarding: browser AND engine share it.
+  const PREAMBLE_TAG = Buffer.from('OPHQ1 ');
+  const front = net.createServer((sock) => {
     sock.setNoDelay(true);
-    let pre = Buffer.alloc(0);
-    let armed = true;
-    const onPreamble = (chunk) => {
-      pre = Buffer.concat([pre, chunk]);
-      const nl = pre.indexOf(0x0a);
-      if (nl === -1) { if (pre.length > 512) sock.destroy(); return; }   // guard
-      armed = false;
-      sock.removeListener('data', onPreamble);
-      const line = pre.slice(0, nl).toString('utf8').trim();
-      const rest = pre.slice(nl + 1);
-      const parts = line.split(/\s+/);
-      if (parts[0] !== 'OPHQ1' || parts.length !== 4) { sock.destroy(); return; }
-      const [, token, printerId, targetPortStr] = parts;
-      const claims = verify(token);
-      if (!claims || (claims.printer_id && String(claims.printer_id) !== String(printerId))) { sock.destroy(); return; }
-      const target = printerTargets.get(String(printerId));
-      const targetPort = Number(targetPortStr);
-      if (!target || !Number.isInteger(targetPort)) { sock.destroy(); return; }
-      const up = net.connect(targetPort, target.ip, () => {
-        if (rest.length) up.write(rest);
-        up.pipe(sock); sock.pipe(up);
-      });
-      up.on('error', () => sock.destroy());
-      sock.on('error', () => up.destroy());
-      sock.on('close', () => up.destroy());
+    let buf = Buffer.alloc(0);
+    const onFirst = (chunk) => {
+      buf = Buffer.concat([buf, chunk]);
+      const cmp = buf.slice(0, PREAMBLE_TAG.length);
+      const isPrefix = PREAMBLE_TAG.slice(0, cmp.length).equals(cmp);
+      if (!isPrefix) {
+        // Not our preamble -> replay the peeked bytes to the HTTP server and let
+        // it own the socket from here.
+        sock.removeListener('data', onFirst);
+        sock.unshift(buf);                 // put peeked bytes back at the head...
+        httpServer.emit('connection', sock);   // ...then let HTTP parse from there
+        return;
+      }
+      const nl = buf.indexOf(0x0a);
+      if (nl === -1) { if (buf.length > 512) sock.destroy(); return; }   // guard
+      sock.removeListener('data', onFirst);
+      handleRawTunnel(sock, buf, nl);
     };
-    sock.on('data', onPreamble);
+    sock.on('data', onFirst);
     sock.on('error', () => {});
   });
-  server.on('error', (e) => log && log('tcp passthrough error:', e.message));
-  server.listen(port, '0.0.0.0', () => log && log(`tcp passthrough listening on 0.0.0.0:${port}`));
-  return server;
-}
 
-
-// ---- per-printer raw forward listeners (for the engine, zero-change path) ---
-// For each printer we front, open a dedicated local TCP listener that raw-forwards
-// to the printer's real port. The engine then connects to <clientPublicHost>:
-// <mappedPublicPort> exactly as if it were the printer itself - no protocol
-// change, TLS (Bambu MQTT) passes through end-to-end (cert pinned to printer).
-// The port mapping is reported to the broker so the control-plane can point the
-// engine's ip_address/port at us. Reachability still needs a router port-forward.
-//
-// Security note (beta): these forwarders are open on the LAN/forwarded port with
-// no per-connection auth (parity with port-forwarding the printer directly).
-// Hardening (per-connection token) is tracked in the backlog.
-const rawForwarders = new Map();   // key `${printerId}:${port}` -> server
-
-function rawForwardKey(printerId, port) { return `${printerId}:${port}`; }
-
-// base local port for raw forwarders; mapped port = base + printerId*10 + slot
-function mappedForwardPort(basePort, printerId, slot) { return basePort + Number(printerId) * 10 + slot; }
-
-function ensureRawForwarders({ basePort, printers, log }) {
-  const wanted = new Map();   // localPort -> {ip, port, printerId}
-  for (const p of printers || []) {
-    const targets = [];
-    if (p.vendor === 'bambu') {
-      targets.push({ port: p.mqtt_port || 8883, slot: 0 });
-      targets.push({ port: p.ftp_port || 990, slot: 1 });
-    } else {
-      targets.push({ port: p.moonraker_port || 7125, slot: 0 });
-    }
-    for (const t of targets) {
-      const local = mappedForwardPort(basePort, p.id, t.slot);
-      wanted.set(local, { ip: p.ip, port: t.port, printerId: p.id });
-    }
-  }
-  // close forwarders no longer wanted
-  for (const [local, server] of rawForwarders) {
-    if (!wanted.has(Number(local))) { try { server.close(); } catch {} rawForwarders.delete(local); }
-  }
-  // open new ones
-  const mapping = [];
-  for (const [local, tgt] of wanted) {
-    mapping.push({ printer_id: tgt.printerId, local_port: local, target_port: tgt.port });
-    if (rawForwarders.has(String(local))) continue;
-    const server = net.createServer((sock) => {
-      sock.setNoDelay(true);
-      const up = net.connect(tgt.port, tgt.ip, () => { up.pipe(sock); sock.pipe(up); });
-      up.on('error', () => sock.destroy());
-      sock.on('error', () => up.destroy());
-      sock.on('close', () => up.destroy());
+  function handleRawTunnel(sock, buf, nl) {
+    const line = buf.slice(0, nl).toString('utf8').trim();
+    const rest = buf.slice(nl + 1);
+    const parts = line.split(/\s+/);
+    if (parts[0] !== 'OPHQ1' || parts.length !== 4) { sock.destroy(); return; }
+    const [, token, printerId, targetPortStr] = parts;
+    const claims = verifyRawToken ? verifyRawToken(token) : null;
+    if (!claims || (claims.printer_id && String(claims.printer_id) !== String(printerId))) { sock.destroy(); return; }
+    const target = printerTargets.get(String(printerId));
+    const targetPort = Number(targetPortStr);
+    if (!target || !Number.isInteger(targetPort)) { sock.destroy(); return; }
+    const up = net.connect(targetPort, target.ip, () => {
+      if (rest.length) up.write(rest);
+      up.pipe(sock); sock.pipe(up);
     });
-    server.on('error', (e) => log && log(`raw forwarder :${local} error:`, e.message));
-    server.listen(local, '0.0.0.0', () => log && log(`raw forward :${local} -> ${tgt.ip}:${tgt.port} (printer ${tgt.printerId})`));
-    rawForwarders.set(String(local), server);
+    up.on('error', () => sock.destroy());
+    sock.on('error', () => up.destroy());
+    sock.on('close', () => up.destroy());
   }
-  return mapping;   // [{printer_id, local_port, target_port}] to report to the broker
+
+  httpServer.on('clientError', (err, sock) => { try { sock.destroy(); } catch {} });
+  front.on('error', (e) => log && log('gateway server error:', e.message));
+  front.listen(port, '0.0.0.0', () => log && log(`gateway listening on 0.0.0.0:${port} (forward this ONE port on your router for remote access)`));
+  return front;
 }
 
-export { startGateway, setPrinters, verifyBrowserToken, bridgeTcpOverWs, startTcpPassthrough, ensureRawForwarders };
+export { startGateway, setPrinters, verifyBrowserToken, bridgeTcpOverWs };
