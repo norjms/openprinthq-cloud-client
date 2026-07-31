@@ -93,6 +93,24 @@ else
   bash "$HERE/fetch-node.sh" "$TARGET" "app/src-tauri/binaries"
 fi
 
+# Camera sidecars (go2rtc + ffmpeg) - universal, same as node. Credit: OctoEverywhere (AGPL-3.0).
+if [ "$TARGET" = "universal-apple-darwin" ]; then
+  bash "$HERE/fetch-camera-tools.sh" aarch64-apple-darwin "app/src-tauri/binaries"
+  bash "$HERE/fetch-camera-tools.sh" x86_64-apple-darwin "app/src-tauri/binaries"
+  if command -v lipo >/dev/null 2>&1; then
+    for tool in go2rtc ffmpeg; do
+      if lipo -create "app/src-tauri/binaries/${tool}-aarch64-apple-darwin" "app/src-tauri/binaries/${tool}-x86_64-apple-darwin" -output "app/src-tauri/binaries/${tool}-universal-apple-darwin" 2>/dev/null; then
+        chmod +x "app/src-tauri/binaries/${tool}-universal-apple-darwin"
+      else
+        cp "app/src-tauri/binaries/${tool}-${HOST_TRIPLE}" "app/src-tauri/binaries/${tool}-universal-apple-darwin"
+        chmod +x "app/src-tauri/binaries/${tool}-universal-apple-darwin"
+      fi
+    done
+  fi
+else
+  bash "$HERE/fetch-camera-tools.sh" "$TARGET" "app/src-tauri/binaries"
+fi
+
 # Verify the sidecar Tauri will look for actually exists (it is resolved as
 # binaries/ophq-node-<TAURI_ENV_TARGET_TRIPLE>). Fail loudly with a listing so a
 # mismatch is obvious rather than dying deep inside the bundler.
