@@ -55,7 +55,19 @@ const CONFIG = {
   streamTimeoutMs: Number(process.env.OPHQ_STREAM_TIMEOUT_MS || 60000),
   reconnectMinMs: 2000,
   reconnectMaxMs: 30000,
-  requestTimeoutMs: Number(process.env.OPHQ_REQUEST_TIMEOUT_MS || 20000)
+  requestTimeoutMs: Number(process.env.OPHQ_REQUEST_TIMEOUT_MS || 20000),
+  // ---- broker/rendezvous gateway (docs/broker-architecture.md) ----
+  // Local gateway listen port (bound 0.0.0.0). Forward this on the router for
+  // remote access. Browsers connect here directly; the cloud only brokers it.
+  gatewayPort: Number(process.env.OPHQ_GATEWAY_PORT || 8787),
+  // The public endpoint to advertise to the broker. publicHost = the user's
+  // DDNS name or public IP; publicPort = the externally-forwarded port that maps
+  // to gatewayPort. If publicHost is empty the broker falls back to the source
+  // IP it sees, and publicPort defaults to gatewayPort.
+  publicHost: (process.env.OPHQ_PUBLIC_HOST || '').trim(),
+  publicPort: Number(process.env.OPHQ_PUBLIC_PORT || 0) || 0,
+  // How often to re-register (heartbeat) our endpoint + printer inventory.
+  registerIntervalMs: Number(process.env.OPHQ_REGISTER_INTERVAL_MS || 30000)
 };
 
 // Logs go to stderr so stdout stays clean (e.g. for `--pubkey`).
@@ -413,6 +425,64 @@ function hostCidrs() {
 function primaryHostCidr() { return hostCidrs()[0] || ''; }
 
 // ---- SSE stream consumer -------------------------------------------------
+// ---- broker registration + local gateway (docs/broker-architecture.md) ----
+const gateway = require('./gateway.js');
+let gatewaySecret = null;          // shared HMAC secret for browser tokens
+let gatewayServer = null;
+let knownPrinters = [];            // last inventory we registered
+
+// Ask the broker to register our public endpoint + printer inventory. The broker
+// returns a per-connector gatewaySecret we use to verify browser tokens. The
+// browser data path never touches the cloud - this is control-plane signaling
+// only, over the same authenticated channel as the job stream.
+async function registerWithBroker() {
+  try {
+    const body = {
+      public_host: CONFIG.publicHost || null,          // null => broker uses source IP
+      public_port: CONFIG.publicPort || CONFIG.gatewayPort,
+      gateway_port: CONFIG.gatewayPort,
+      printers: knownPrinters
+    };
+    const res = await fetch(`${CONFIG.controlUrl}/api/connector/register-endpoint`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${CONFIG.token}`, 'content-type': 'application/json', ...clientAuthHeaders() },
+      body: JSON.stringify(body)
+    });
+    if (!res.ok) { dbg('register-endpoint failed', res.status); return; }
+    const out = await res.json().catch(() => ({}));
+    if (out.gateway_secret && out.gateway_secret !== gatewaySecret) {
+      gatewaySecret = out.gateway_secret;
+      dbg('received gateway secret from broker');
+    }
+    if (Array.isArray(out.printers)) {
+      knownPrinters = out.printers;
+      gateway.setPrinters(out.printers);                 // bridge targets = what the broker says we front
+      dbg('registered', out.printers.length, 'printer(s) with the gateway');
+    }
+    if (out.public_host) dbg('broker sees us at', out.public_host + ':' + (out.public_port || CONFIG.gatewayPort));
+  } catch (e) { dbg('register error', e?.message); }
+}
+
+// Camera frame URL for a printer: Bambu goes through local go2rtc (see camera.js);
+// others may expose a direct snapshot. Returns null if no camera.
+function cameraFrameUrlFor(printerId, target) {
+  try {
+    const cam = require('./camera.js');
+    if (target && target.vendor === 'bambu' && cam.localFrameUrl) return cam.localFrameUrl(`p${printerId}`);
+  } catch { /* camera optional */ }
+  return null;
+}
+
+function ensureGateway() {
+  if (gatewayServer) return;
+  gatewayServer = gateway.startGateway({
+    port: CONFIG.gatewayPort,
+    gatewaySecretRef: () => gatewaySecret,               // read live (arrives from broker)
+    cameraFrameUrl: cameraFrameUrlFor,
+    log
+  });
+}
+
 async function connectOnce() {
   const url = `${CONFIG.controlUrl}/api/connector/stream?name=${encodeURIComponent(CONFIG.name)}&host_cidr=${encodeURIComponent(primaryHostCidr())}`;
   const ac = new AbortController();
@@ -455,8 +525,14 @@ async function connectOnce() {
 async function main() {
   if (!CONFIG.controlUrl) fail('OPHQ_CONTROL_URL is required (e.g. https://openprinthq.example.org)');
   if (!CONFIG.token) fail('OPHQ_CONNECTOR_TOKEN is required (create one in Settings → Connectors)');
-  log(`starting — control=${CONFIG.controlUrl} allow=[${CONFIG.allow.join(',')}] ports=[${CONFIG.allowPorts.join(',')}] signature-verification=${signPubKey ? 'ENFORCED' : 'off'} client-key=${clientKey ? 'on' : 'off'}`);
+  log(`starting — control=${CONFIG.controlUrl} gateway-port=${CONFIG.gatewayPort} public=${CONFIG.publicHost || '(broker-detected)'}:${CONFIG.publicPort || CONFIG.gatewayPort} signature-verification=${signPubKey ? 'ENFORCED' : 'off'} client-key=${clientKey ? 'on' : 'off'}`);
   if (clientPubPem) log(`this connector's public key (register it in Settings → Connectors):\n${clientPubPem.trim()}`);
+  // Broker/rendezvous: start the local gateway and begin registering our public
+  // endpoint. Browsers connect to the gateway directly; the cloud only brokers.
+  ensureGateway();
+  registerWithBroker();
+  setInterval(registerWithBroker, CONFIG.registerIntervalMs);
+
   let backoff = CONFIG.reconnectMinMs;
   for (;;) {
     try {
