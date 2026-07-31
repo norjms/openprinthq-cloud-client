@@ -48,7 +48,16 @@ chmod +x "$OUTDIR/go2rtc-${TRIPLE}"
 # Static builds: macOS from evermeet (x64) / OSXExperts, Linux from John Van Sickle (amd64/arm64).
 if [ "$OS" = "linux" ]; then
   if [ "$ARCH" = "amd64" ]; then FFURL="https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz"; else FFURL="https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-arm64-static.tar.xz"; fi
-  curl -fL --retry 3 --retry-delay 2 --connect-timeout 20 "$FFURL" -o "$TMP/ffmpeg.tar.xz"
+  # Download with retries and verify it's a real xz archive before extracting
+  # (a truncated/HTML response would make tar fail hard under set -e).
+  ok=0
+  for attempt in 1 2 3 4; do
+    curl -fL --retry 3 --retry-delay 2 --connect-timeout 20 --max-time 300 "$FFURL" -o "$TMP/ffmpeg.tar.xz" || { sleep 3; continue; }
+    # xz magic bytes: FD 37 7A 58 5A 00
+    if [ -s "$TMP/ffmpeg.tar.xz" ] && head -c 6 "$TMP/ffmpeg.tar.xz" | od -An -tx1 | grep -q "fd 37 7a 58 5a 00"; then ok=1; break; fi
+    echo "ffmpeg download attempt $attempt was not a valid xz archive, retrying" >&2; sleep 3
+  done
+  [ "$ok" = 1 ] || { echo "ERROR: could not download a valid ffmpeg archive for $TRIPLE" >&2; exit 1; }
   ( cd "$TMP" && tar -xJf ffmpeg.tar.xz )
   FFBIN="$(find "$TMP" -type f -name ffmpeg | head -1)"
 else
