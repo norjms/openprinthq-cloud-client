@@ -70,7 +70,10 @@ const CONFIG = {
   // How often to re-register (heartbeat) our endpoint + printer inventory.
   registerIntervalMs: Number(process.env.OPHQ_REGISTER_INTERVAL_MS || 30000),
   // Raw TCP passthrough port for the cloud engine (forward this too).
-  tcpPort: Number(process.env.OPHQ_TCP_PORT || 8788)
+  tcpPort: Number(process.env.OPHQ_TCP_PORT || 8788),
+  // Base port for per-printer raw forwarders (engine zero-change path). Mapped
+  // port = base + printerId*10 + slot. Forward this range on your router.
+  forwardBasePort: Number(process.env.OPHQ_FORWARD_BASE_PORT || 39000)
 };
 
 // Logs go to stderr so stdout stays clean (e.g. for `--pubkey`).
@@ -430,6 +433,7 @@ function primaryHostCidr() { return hostCidrs()[0] || ''; }
 // ---- SSE stream consumer -------------------------------------------------
 // ---- broker registration + local gateway (docs/broker-architecture.md) ----
 let gatewaySecret = null;          // shared HMAC secret for browser tokens
+let forwardMapping = [];           // [{printer_id, local_port, target_port}] for the engine path
 let gatewayServer = null;
 let knownPrinters = [];            // last inventory we registered
 
@@ -443,6 +447,9 @@ async function registerWithBroker() {
       public_host: CONFIG.publicHost || null,          // null => broker uses source IP
       public_port: CONFIG.publicPort || CONFIG.gatewayPort,
       gateway_port: CONFIG.gatewayPort,
+      tcp_port: CONFIG.tcpPort,
+      forward_base_port: CONFIG.forwardBasePort,
+      forward_mapping: forwardMapping,
       printers: knownPrinters
     };
     const res = await fetch(`${CONFIG.controlUrl}/api/connector/register-endpoint`, {
@@ -459,7 +466,9 @@ async function registerWithBroker() {
     if (Array.isArray(out.printers)) {
       knownPrinters = out.printers;
       gateway.setPrinters(out.printers);                 // bridge targets = what the broker says we front
-      dbg('registered', out.printers.length, 'printer(s) with the gateway');
+      // Open per-printer raw forwarders (engine zero-change path) + report the map.
+      forwardMapping = gateway.ensureRawForwarders({ basePort: CONFIG.forwardBasePort, printers: out.printers, log });
+      dbg('registered', out.printers.length, 'printer(s);', forwardMapping.length, 'raw forward port(s)');
     }
     if (out.public_host) dbg('broker sees us at', out.public_host + ':' + (out.public_port || CONFIG.gatewayPort));
   } catch (e) { dbg('register error', e?.message); }

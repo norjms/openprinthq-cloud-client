@@ -203,4 +203,61 @@ function startTcpPassthrough({ port, gatewaySecretRef, verify, log }) {
   return server;
 }
 
-export { startGateway, setPrinters, verifyBrowserToken, bridgeTcpOverWs, startTcpPassthrough };
+
+// ---- per-printer raw forward listeners (for the engine, zero-change path) ---
+// For each printer we front, open a dedicated local TCP listener that raw-forwards
+// to the printer's real port. The engine then connects to <clientPublicHost>:
+// <mappedPublicPort> exactly as if it were the printer itself - no protocol
+// change, TLS (Bambu MQTT) passes through end-to-end (cert pinned to printer).
+// The port mapping is reported to the broker so the control-plane can point the
+// engine's ip_address/port at us. Reachability still needs a router port-forward.
+//
+// Security note (beta): these forwarders are open on the LAN/forwarded port with
+// no per-connection auth (parity with port-forwarding the printer directly).
+// Hardening (per-connection token) is tracked in the backlog.
+const rawForwarders = new Map();   // key `${printerId}:${port}` -> server
+
+function rawForwardKey(printerId, port) { return `${printerId}:${port}`; }
+
+// base local port for raw forwarders; mapped port = base + printerId*10 + slot
+function mappedForwardPort(basePort, printerId, slot) { return basePort + Number(printerId) * 10 + slot; }
+
+function ensureRawForwarders({ basePort, printers, log }) {
+  const wanted = new Map();   // localPort -> {ip, port, printerId}
+  for (const p of printers || []) {
+    const targets = [];
+    if (p.vendor === 'bambu') {
+      targets.push({ port: p.mqtt_port || 8883, slot: 0 });
+      targets.push({ port: p.ftp_port || 990, slot: 1 });
+    } else {
+      targets.push({ port: p.moonraker_port || 7125, slot: 0 });
+    }
+    for (const t of targets) {
+      const local = mappedForwardPort(basePort, p.id, t.slot);
+      wanted.set(local, { ip: p.ip, port: t.port, printerId: p.id });
+    }
+  }
+  // close forwarders no longer wanted
+  for (const [local, server] of rawForwarders) {
+    if (!wanted.has(Number(local))) { try { server.close(); } catch {} rawForwarders.delete(local); }
+  }
+  // open new ones
+  const mapping = [];
+  for (const [local, tgt] of wanted) {
+    mapping.push({ printer_id: tgt.printerId, local_port: local, target_port: tgt.port });
+    if (rawForwarders.has(String(local))) continue;
+    const server = net.createServer((sock) => {
+      sock.setNoDelay(true);
+      const up = net.connect(tgt.port, tgt.ip, () => { up.pipe(sock); sock.pipe(up); });
+      up.on('error', () => sock.destroy());
+      sock.on('error', () => up.destroy());
+      sock.on('close', () => up.destroy());
+    });
+    server.on('error', (e) => log && log(`raw forwarder :${local} error:`, e.message));
+    server.listen(local, '0.0.0.0', () => log && log(`raw forward :${local} -> ${tgt.ip}:${tgt.port} (printer ${tgt.printerId})`));
+    rawForwarders.set(String(local), server);
+  }
+  return mapping;   // [{printer_id, local_port, target_port}] to report to the broker
+}
+
+export { startGateway, setPrinters, verifyBrowserToken, bridgeTcpOverWs, startTcpPassthrough, ensureRawForwarders };
