@@ -12,11 +12,10 @@
 // Reachability: the listener binds 0.0.0.0 so a router port-forward can reach it.
 // This does NOT traverse CG-NAT (no inbound port). Accepted limitation.
 
-'use strict';
-const http = require('http');
-const net = require('net');
-const crypto = require('crypto');
-const { URL } = require('url');
+import http from 'node:http';
+import net from 'node:net';
+import crypto from 'node:crypto';
+import { URL } from 'node:url';
 
 // ---- browser token verification -----------------------------------------
 // The broker issues short-lived tokens to browsers; the client verifies them so
@@ -204,4 +203,4 @@ function startTcpPassthrough({ port, gatewaySecretRef, verify, log }) {
   return server;
 }
 
-module.exports = { startGateway, setPrinters, verifyBrowserToken, bridgeTcpOverWs, startTcpPassthrough };
+export { startGateway, setPrinters, verifyBrowserToken, bridgeTcpOverWs, startTcpPassthrough };
