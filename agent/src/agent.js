@@ -28,6 +28,7 @@ import os from 'node:os';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import { registerBambuStream, localFrameUrl, localMjpegUrl, bambuSupportsRtsp } from './camera.js';
+import * as gateway from './gateway.js';
 
 function readPubKey() {
   const inline = process.env.OPHQ_SIGNING_PUBKEY;
@@ -428,7 +429,6 @@ function primaryHostCidr() { return hostCidrs()[0] || ''; }
 
 // ---- SSE stream consumer -------------------------------------------------
 // ---- broker registration + local gateway (docs/broker-architecture.md) ----
-const gateway = require('./gateway.js');
 let gatewaySecret = null;          // shared HMAC secret for browser tokens
 let gatewayServer = null;
 let knownPrinters = [];            // last inventory we registered
@@ -468,10 +468,7 @@ async function registerWithBroker() {
 // Camera frame URL for a printer: Bambu goes through local go2rtc (see camera.js);
 // others may expose a direct snapshot. Returns null if no camera.
 function cameraFrameUrlFor(printerId, target) {
-  try {
-    const cam = require('./camera.js');
-    if (target && target.vendor === 'bambu' && cam.localFrameUrl) return cam.localFrameUrl(`p${printerId}`);
-  } catch { /* camera optional */ }
+  if (target && target.vendor === 'bambu') return localFrameUrl(`p${printerId}`);
   return null;
 }
 
