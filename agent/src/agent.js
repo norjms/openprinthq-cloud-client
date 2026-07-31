@@ -67,7 +67,9 @@ const CONFIG = {
   publicHost: (process.env.OPHQ_PUBLIC_HOST || '').trim(),
   publicPort: Number(process.env.OPHQ_PUBLIC_PORT || 0) || 0,
   // How often to re-register (heartbeat) our endpoint + printer inventory.
-  registerIntervalMs: Number(process.env.OPHQ_REGISTER_INTERVAL_MS || 30000)
+  registerIntervalMs: Number(process.env.OPHQ_REGISTER_INTERVAL_MS || 30000),
+  // Raw TCP passthrough port for the cloud engine (forward this too).
+  tcpPort: Number(process.env.OPHQ_TCP_PORT || 8788)
 };
 
 // Logs go to stderr so stdout stays clean (e.g. for `--pubkey`).
@@ -479,6 +481,13 @@ function ensureGateway() {
     port: CONFIG.gatewayPort,
     gatewaySecretRef: () => gatewaySecret,               // read live (arrives from broker)
     cameraFrameUrl: cameraFrameUrlFor,
+    log
+  });
+  // Raw TCP passthrough for the cloud engine (server-to-server). Uses a separate
+  // forwarded port so HTTP and raw TCP don't share a listener.
+  gateway.startTcpPassthrough({
+    port: CONFIG.tcpPort,
+    verify: (tok) => gateway.verifyBrowserToken(tok, gatewaySecret),
     log
   });
 }

@@ -159,4 +159,49 @@ function startGateway({ port, gatewaySecretRef, cameraFrameUrl, log }) {
   return server;
 }
 
-module.exports = { startGateway, setPrinters, verifyBrowserToken, bridgeTcpOverWs };
+
+// ---- authenticated raw TCP passthrough (for the engine, server-to-server) ---
+// The cloud engine (not a browser) reaches a printer's raw TCP port through the
+// gateway. It opens a connection and sends a single line preamble:
+//     OPHQ1 <token> <printerId> <targetPort>\n
+// We verify the token, look up the printer's LAN ip, and splice to ip:targetPort.
+// Bambu MQTT is TLS end-to-end (cert pinned to the printer); we only forward
+// bytes, so the engine's TLS terminates at the printer as normal.
+function startTcpPassthrough({ port, gatewaySecretRef, verify, log }) {
+  const server = net.createServer((sock) => {
+    sock.setNoDelay(true);
+    let pre = Buffer.alloc(0);
+    let armed = true;
+    const onPreamble = (chunk) => {
+      pre = Buffer.concat([pre, chunk]);
+      const nl = pre.indexOf(0x0a);
+      if (nl === -1) { if (pre.length > 512) sock.destroy(); return; }   // guard
+      armed = false;
+      sock.removeListener('data', onPreamble);
+      const line = pre.slice(0, nl).toString('utf8').trim();
+      const rest = pre.slice(nl + 1);
+      const parts = line.split(/\s+/);
+      if (parts[0] !== 'OPHQ1' || parts.length !== 4) { sock.destroy(); return; }
+      const [, token, printerId, targetPortStr] = parts;
+      const claims = verify(token);
+      if (!claims || (claims.printer_id && String(claims.printer_id) !== String(printerId))) { sock.destroy(); return; }
+      const target = printerTargets.get(String(printerId));
+      const targetPort = Number(targetPortStr);
+      if (!target || !Number.isInteger(targetPort)) { sock.destroy(); return; }
+      const up = net.connect(targetPort, target.ip, () => {
+        if (rest.length) up.write(rest);
+        up.pipe(sock); sock.pipe(up);
+      });
+      up.on('error', () => sock.destroy());
+      sock.on('error', () => up.destroy());
+      sock.on('close', () => up.destroy());
+    };
+    sock.on('data', onPreamble);
+    sock.on('error', () => {});
+  });
+  server.on('error', (e) => log && log('tcp passthrough error:', e.message));
+  server.listen(port, '0.0.0.0', () => log && log(`tcp passthrough listening on 0.0.0.0:${port}`));
+  return server;
+}
+
+module.exports = { startGateway, setPrinters, verifyBrowserToken, bridgeTcpOverWs, startTcpPassthrough };
