@@ -55,9 +55,7 @@ export async function ensureGo2rtc() {
       // Point go2rtc at the bundled ffmpeg (RTSPS->MJPEG transcode) when present,
       // and bind its API to localhost only.
       const ffmpegBin = process.env.OPHQ_FFMPEG_BIN;
-      const cfg = ffmpegBin
-        ? `{api: {listen: "127.0.0.1:1984"}, ffmpeg: {bin: ${JSON.stringify(ffmpegBin)}}}`
-        : '{api: {listen: "127.0.0.1:1984"}}';
+      const cfg = buildConfig(ffmpegBin, currentIce);
       go2rtcProc = spawn(go2rtcBin, ['-config', cfg], { stdio: 'ignore', detached: false });
       go2rtcProc.on('exit', (code) => { log('go2rtc exited', code); go2rtcProc = null; });
       // wait up to ~5s for it to come up
@@ -73,6 +71,67 @@ export async function ensureGo2rtc() {
     } finally { go2rtcStarting = null; }
   })();
   return go2rtcStarting;
+}
+
+// go2rtc config. The WebRTC listener is what lets the browser talk to this host
+// directly instead of pulling video through the cloud: go2rtc gathers its own
+// ICE candidates here and answers the browser's offer.
+//
+// ice_servers matter because the printer LAN is usually behind CGNAT. Host
+// candidates are useless to a remote browser and STUN reflexive candidates often
+// fail to pair through carrier NAT, so without a TURN relay to fall back to the
+// negotiation simply never completes.
+const WEBRTC_PORT = process.env.OPHQ_GO2RTC_WEBRTC_PORT || '18555';
+let currentIce = [];
+function buildConfig(ffmpegBin, ice) {
+  const cfg = {
+    api: { listen: '127.0.0.1:1984' },
+    webrtc: { listen: `:${WEBRTC_PORT}`, ice_servers: ice && ice.length ? ice : [{ urls: 'stun:stun.cloudflare.com:3478' }] },
+    log: { level: 'warn' }
+  };
+  if (ffmpegBin) cfg.ffmpeg = { bin: ffmpegBin };
+  return JSON.stringify(cfg);
+}
+
+// go2rtc reads ice_servers at startup, so a changed credential set means a
+// respawn. Cloudflare TURN credentials are short-lived, so this happens on a
+// normal cadence rather than only at install time. Streams are re-registered on
+// demand, so a respawn costs one reconnect, not lost configuration.
+function iceChanged(next) {
+  try { return JSON.stringify(next || []) !== JSON.stringify(currentIce || []); }
+  catch { return true; }
+}
+export async function applyIceServers(ice) {
+  if (!iceChanged(ice)) return false;
+  currentIce = Array.isArray(ice) ? ice : [];
+  if (go2rtcProc) {
+    log('ICE servers changed — restarting go2rtc to pick them up');
+    try { go2rtcProc.kill(); } catch { /* already gone */ }
+    go2rtcProc = null;
+    await new Promise((r) => setTimeout(r, 300));
+  }
+  return true;
+}
+
+// Hand a browser's SDP offer to the LOCAL go2rtc and return its answer. This is
+// the whole point of the agent-local model: only the offer/answer text crosses
+// the cloud, and the media then flows browser <-> this host.
+export async function webrtcOffer(name, offer) {
+  const up = (await isGo2rtcUp()) || (await ensureGo2rtc());
+  if (!up) throw new Error('go2rtc unavailable on the connector host');
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 15000);
+  try {
+    const r = await fetch(`${GO2RTC_API}/api/webrtc?src=${encodeURIComponent(name)}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: typeof offer === 'string' ? offer : JSON.stringify(offer),
+      signal: ctrl.signal
+    });
+    const text = await r.text();
+    if (!r.ok) throw new Error(`go2rtc webrtc failed: ${r.status} ${text.slice(0, 200)}`);
+    return text;
+  } finally { clearTimeout(timer); }
 }
 
 // Register a Bambu RTSPS source in the local go2rtc. Returns the stream name.

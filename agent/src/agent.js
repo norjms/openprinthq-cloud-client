@@ -27,7 +27,7 @@ import dgram from 'node:dgram';
 import os from 'node:os';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
-import { registerBambuStream, localFrameUrl, localMjpegUrl, bambuSupportsRtsp } from './camera.js';
+import { registerBambuStream, localFrameUrl, localMjpegUrl, bambuSupportsRtsp, webrtcOffer, applyIceServers } from './camera.js';
 
 function readPubKey() {
   const inline = process.env.OPHQ_SIGNING_PUBKEY;
@@ -349,6 +349,31 @@ async function runDiscover(job) {
 
 // ---- camera relay (agent-local; see camera.js for architecture credit) ----
 // Register a Bambu RTSPS stream in the local go2rtc so frames can be fetched.
+// Answer a browser's WebRTC offer from the LOCAL go2rtc.
+//
+// The control-plane only carries the SDP text; once this answer gets back, the
+// browser and this host negotiate directly and the video never crosses the
+// cloud server. The job also carries fresh ICE servers (Cloudflare STUN, plus
+// short-lived TURN when the deployment has it configured) because go2rtc needs
+// a relay to fall back to when the printer LAN is behind CGNAT.
+async function runCameraWebrtc(job) {
+  const { vendor, ip, access_code, model, name, offer, ice_servers } = job;
+  try {
+    if (!offer) return { ok: false, error: 'no SDP offer supplied' };
+    if (Array.isArray(ice_servers) && ice_servers.length) await applyIceServers(ice_servers);
+    let stream = name || ('p' + (job.printer_id || 'x'));
+    if (vendor === 'bambu') {
+      if (!bambuSupportsRtsp(model)) return { ok: false, error: 'model has no RTSPS camera (A1/P1 chamber-image not supported)' };
+      // Idempotent: re-registering after a go2rtc restart is the normal path.
+      stream = await registerBambuStream({ name: stream, ip, accessCode: access_code });
+    } else {
+      return { ok: false, error: 'WebRTC camera is only available for RTSPS-capable printers' };
+    }
+    const answer = await webrtcOffer(stream, offer);
+    return { ok: true, stream, answer };
+  } catch (e) { return { ok: false, error: e.message || 'camera webrtc failed' }; }
+}
+
 async function runCameraRegister(job) {
   const { vendor, ip, access_code, model, name } = job;
   try {
@@ -390,6 +415,7 @@ async function handleJob(job) {
   if (job.kind === 'discover') { const r = await runDiscover(job); dbg('job result', { id: job.id, kind: 'discover', found: r.devices.length }); await post({ id: job.id, ...r }); return; }
   if (job.kind === 'camera-register') { const r = await runCameraRegister(job); await post({ id: job.id, ...r }); return; }
   if (job.kind === 'camera-frame') { const r = await runCameraFrame(job); await post({ id: job.id, ...r }); return; }
+  if (job.kind === 'camera-webrtc') { const r = await runCameraWebrtc(job); await post({ id: job.id, ...r }); return; }
   const result = (job.kind === 'tcp-probe') ? await runTcpProbe(job) : await runHttpJob(job);
   dbg('job result', { id: job.id, kind: job.kind || 'http', status: result.status, ok: result.ok, error: result.error });
   await post({ id: job.id, ...result });
