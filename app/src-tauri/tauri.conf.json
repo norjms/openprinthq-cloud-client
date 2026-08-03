@@ -23,7 +23,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; connect-src 'self' https://git.nnlink.org https://openprinthq.com https:; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'"
+      "csp": "default-src 'self'; connect-src 'self' https://api.github.com https://github.com https://objects.githubusercontent.com https://openprinthq.com https:; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'"
     }
   },
   "bundle": {

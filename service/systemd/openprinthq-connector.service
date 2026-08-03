@@ -14,7 +14,7 @@
 
 [Unit]
 Description=OpenPrintHQ Cloud Client connector
-Documentation=https://git.nnlink.org/OpenPrintHQ/openprinthq-cloud-client
+Documentation=https://github.com/norjms/openprinthq-cloud-client
 After=network-online.target
 Wants=network-online.target
 

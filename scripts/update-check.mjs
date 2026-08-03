@@ -7,8 +7,8 @@
 // Exit 0 = up to date, 10 = update available, 1 = check failed.
 
 const REPO_API =
-  'https://git.nnlink.org/api/v1/repos/OpenPrintHQ/openprinthq-cloud-client/releases/latest';
-const RELEASES = 'https://git.nnlink.org/OpenPrintHQ/openprinthq-cloud-client/releases';
+  'https://api.github.com/repos/norjms/openprinthq-cloud-client/releases?per_page=10';
+const RELEASES = 'https://github.com/norjms/openprinthq-cloud-client/releases';
 
 const current = (process.argv[2] || '0.0.0').replace(/^v/, '');
 
