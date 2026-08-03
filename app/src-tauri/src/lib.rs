@@ -538,7 +538,7 @@ async fn check_update() -> Result<UpdateInfo, String> {
     .map_err(|e| e.to_string())?
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 pub struct ValidateResult {
     ok: bool,
     status: u16,
@@ -546,49 +546,62 @@ pub struct ValidateResult {
 }
 
 /// Onboarding pre-check: confirm the instance URL is reachable and the token is
-/// accepted, before saving. Opens the connector stream (Bearer token) and reads
-/// only the HTTP status. 200 = reachable + token accepted; 401 = reached but the
-/// token is invalid or the connector is paired to a different client; transport
-/// error = URL unreachable. Done in Rust (ureq) so it isn't CORS-blocked.
+/// accepted, before saving.
+///
+/// This delegates to the bundled agent (`agent.js --validate`) rather than
+/// making the request here. Once the control-plane has locked onto a client key
+/// (trust-on-first-use), it requires every connect to carry a signature over
+/// `token.timestamp`. The private key lives with the agent, so a check made
+/// from this process cannot sign and is rejected with 401 even when the token
+/// is valid — which made the wizard tell users to reset a working pairing.
+/// The agent can sign, so it can answer truthfully.
 #[tauri::command]
-async fn validate_connection(url: String, token: String) -> Result<ValidateResult, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let base = url.trim().trim_end_matches('/').to_string();
-        if base.is_empty() {
-            return ValidateResult { ok: false, status: 0, reason: "Enter your instance URL.".into() };
-        }
-        if token.trim().is_empty() {
-            return ValidateResult { ok: false, status: 0, reason: "Enter your connector token.".into() };
-        }
-        let endpoint = format!("{base}/api/connector/stream?name=validate");
-        match ureq::get(&endpoint)
-            .set("authorization", &format!("Bearer {}", token.trim()))
-            .set("accept", "text/event-stream")
-            .timeout(std::time::Duration::from_secs(10))
-            .call()
-        {
-            Ok(_) => ValidateResult {
-                ok: true,
-                status: 200,
-                reason: "Connected — your instance accepted this connector.".into(),
-            },
-            Err(ureq::Error::Status(code, _)) => {
-                let reason = if code == 401 {
-                    "Reached your instance, but the connector token was rejected. Check the token, or if this connector is already paired to another client, Reset it in Settings → Connectors.".into()
-                } else {
-                    format!("Reached your instance, but it returned HTTP {code}.")
-                };
-                ValidateResult { ok: false, status: code, reason }
-            }
-            Err(ureq::Error::Transport(t)) => ValidateResult {
+async fn validate_connection(
+    app: AppHandle,
+    state: State<'_, Arc<AppState>>,
+    url: String,
+    token: String,
+) -> Result<ValidateResult, String> {
+    let base = url.trim().trim_end_matches('/').to_string();
+    if base.is_empty() {
+        return Ok(ValidateResult { ok: false, status: 0, reason: "Enter your instance URL.".into() });
+    }
+    if token.trim().is_empty() {
+        return Ok(ValidateResult { ok: false, status: 0, reason: "Enter your connector token.".into() });
+    }
+    let script = agent_script(&app)?;
+    let mut env = HashMap::new();
+    env.insert(
+        "OPHQ_CLIENT_KEY_FILE".to_string(),
+        state.key_path.to_string_lossy().to_string(),
+    );
+    env.insert("OPHQ_CONTROL_URL".to_string(), base.clone());
+    env.insert("OPHQ_CONNECTOR_TOKEN".to_string(), token.trim().to_string());
+    let out = app
+        .shell()
+        .sidecar("ophq-node")
+        .map_err(|e| e.to_string())?
+        .args([script.to_string_lossy().to_string(), "--validate".to_string()])
+        .envs(env)
+        .output()
+        .await
+        .map_err(|e| e.to_string())?;
+    let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    match serde_json::from_str::<ValidateResult>(&text) {
+        Ok(v) => Ok(v),
+        Err(_) => {
+            let err = String::from_utf8_lossy(&out.stderr).trim().to_string();
+            Ok(ValidateResult {
                 ok: false,
                 status: 0,
-                reason: format!("Could not reach {base}. Check the URL and your connection. ({t})"),
-            },
+                reason: if err.is_empty() {
+                    "Could not run the connection check.".to_string()
+                } else {
+                    format!("Could not run the connection check. ({err})")
+                },
+            })
         }
-    })
-    .await
-    .map_err(|e| e.to_string())
+    }
 }
 
 /// Print this connector's public key (for Settings → Connectors → Key).
