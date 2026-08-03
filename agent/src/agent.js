@@ -55,6 +55,8 @@ const CONFIG = {
   streamTimeoutMs: Number(process.env.OPHQ_STREAM_TIMEOUT_MS || 60000),
   reconnectMinMs: 2000,
   reconnectMaxMs: 30000,
+  // Auth failures need user action, not a retry storm.
+  authRetryMs: Number(process.env.OPHQ_AUTH_RETRY_MS || 60000),
   requestTimeoutMs: Number(process.env.OPHQ_REQUEST_TIMEOUT_MS || 20000)
 };
 
@@ -425,7 +427,22 @@ async function connectOnce() {
       signal: ac.signal
     });
   } catch (e) { clearTimeout(idle); throw e; }
-  if (res.status === 401 || res.status === 403) { clearTimeout(idle); fail(`control-plane rejected the connector (${res.status}). If mutual auth is enabled, register this connector's public key (run with --pubkey to print it).`); }
+  if (res.status === 401 || res.status === 403) {
+    clearTimeout(idle);
+    // NOT fatal. Exiting here made the supervisor respawn us immediately, which
+    // produced a tight reconnect loop (~2s) that hid the real cause from the
+    // user. Throw a tagged error instead so main() can back off slowly and log
+    // something actionable.
+    let body = '';
+    try { body = await res.text(); } catch { /* body is optional */ }
+    const keyLocked = body.includes('client key');
+    const err = new Error(keyLocked
+      ? 'this connector is paired to a different client key. Open Settings \u2192 Connectors on your instance, use "Reset key", then restart the connector'
+      : `the connector token was rejected (HTTP ${res.status}). Check the token in Settings \u2192 Connectors`);
+    err.authRejected = true;
+    err.keyLocked = keyLocked;
+    throw err;
+  }
   if (!res.ok || !res.body) { clearTimeout(idle); throw new Error(`stream failed: HTTP ${res.status}`); }
   log(`connected to ${CONFIG.controlUrl} as "${CONFIG.name}" — waiting for jobs (keep-alive ${Math.round(CONFIG.streamTimeoutMs / 1000)}s)`);
 
@@ -463,13 +480,56 @@ async function main() {
       await connectOnce();
       backoff = CONFIG.reconnectMinMs;
     } catch (e) {
-      log('disconnected:', e?.message, `— retrying in ${Math.round(backoff / 1000)}s`);
-      await new Promise((r) => setTimeout(r, backoff));
-      backoff = Math.min(CONFIG.reconnectMaxMs, Math.round(backoff * 1.7));
+      // An auth rejection will not fix itself by retrying faster — it needs the
+      // user to act on the instance. Wait a long, fixed interval so the logs
+      // stay readable and we stop hammering the control-plane.
+      const wait = e?.authRejected ? CONFIG.authRetryMs : backoff;
+      if (e?.authRejected) log('NOT CONNECTED —', e.message, `— rechecking in ${Math.round(wait / 1000)}s`);
+      else log('disconnected:', e?.message, `— retrying in ${Math.round(wait / 1000)}s`);
+      await new Promise((r) => setTimeout(r, wait));
+      if (!e?.authRejected) backoff = Math.min(CONFIG.reconnectMaxMs, Math.round(backoff * 1.7));
     }
+  }
+}
+
+// `node src/agent.js --validate` runs a ONE-SHOT signed connection check and
+// prints a JSON result to stdout. The desktop app's first-run wizard calls this
+// instead of making the request itself: once the control-plane has locked onto
+// a client key, an unsigned request is rejected with 401 even when the token is
+// perfectly valid, so a check that cannot sign always reports failure. Only this
+// process holds the private key, so only this process can answer truthfully.
+async function validateOnce() {
+  const out = (o) => { process.stdout.write(JSON.stringify(o)); process.exit(0); };
+  if (!CONFIG.controlUrl) out({ ok: false, status: 0, reason: 'Enter your instance URL.' });
+  if (!CONFIG.token) out({ ok: false, status: 0, reason: 'Enter your connector token.' });
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), 10000);
+  try {
+    const res = await fetch(`${CONFIG.controlUrl}/api/connector/stream?name=validate`, {
+      headers: { authorization: `Bearer ${CONFIG.token}`, accept: 'text/event-stream', ...clientAuthHeaders() },
+      signal: ac.signal
+    });
+    clearTimeout(timer);
+    if (res.ok) {
+      try { await res.body?.cancel(); } catch { /* nothing to clean up */ }
+      out({ ok: true, status: 200, reason: 'Connected \u2014 your instance accepted this connector.' });
+    }
+    if (res.status === 401 || res.status === 403) {
+      let body = '';
+      try { body = await res.text(); } catch { /* body is optional */ }
+      out({ ok: false, status: res.status, reason: body.includes('client key')
+        ? 'Your token is valid, but this connector is already paired to a different client. Open Settings \u2192 Connectors on your instance, use "Reset key", then try again.'
+        : 'Reached your instance, but the connector token was rejected. Check that you copied the whole token.' });
+    }
+    out({ ok: false, status: res.status, reason: `Reached your instance, but it returned HTTP ${res.status}.` });
+  } catch (e) {
+    clearTimeout(timer);
+    out({ ok: false, status: 0, reason: `Could not reach ${CONFIG.controlUrl}. Check the URL and your connection. (${e?.message || e})` });
   }
 }
 
 process.on('SIGINT', () => { log('shutting down'); process.exit(0); });
 process.on('SIGTERM', () => { log('shutting down'); process.exit(0); });
-main();
+
+if (process.argv.includes('--validate')) validateOnce();
+else main();
