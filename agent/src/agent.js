@@ -216,7 +216,19 @@ async function runTcpProbe(job) {
   });
 }
 
+// Active multiplexed session, when the control-plane supports one. Results go
+// back over it instead of opening a fresh TCP+TLS connection per message, which
+// is what made a busy connector look like it was flapping.
+let activeWs = null;
+const sidxById = new Map();   // tcp stream id -> compact index for binary frames
+
+function wsReady() { return activeWs && activeWs.readyState === 1; }
+
 async function post(body) {
+  if (wsReady()) {
+    try { activeWs.send(JSON.stringify(body)); return; }
+    catch (e) { log('ws send failed, falling back to POST', body?.id, e?.message); }
+  }
   try {
     await fetch(`${CONFIG.controlUrl}/api/connector/result`, {
       method: 'POST',
@@ -224,6 +236,28 @@ async function post(body) {
       body: JSON.stringify(body)
     });
   } catch (e) { log('post failed', body?.id, e?.message); }
+}
+
+// Bulk TCP payload upstream. Binary when we have a session and the control-plane
+// gave us an index for this stream; base64 JSON otherwise. Chunked so a large
+// transfer interleaves with control traffic rather than sitting in front of it.
+const WS_CHUNK = 16 * 1024;
+function postTcpData(id, chunk) {
+  const idx = sidxById.get(id);
+  if (wsReady() && idx !== undefined) {
+    const b = Buffer.from(chunk);
+    try {
+      for (let off = 0; off < b.length; off += WS_CHUNK) {
+        const part = b.subarray(off, Math.min(off + WS_CHUNK, b.length));
+        const head = Buffer.alloc(5);
+        head.writeUInt8(1, 0);
+        head.writeUInt32BE(idx, 1);
+        activeWs.send(Buffer.concat([head, part]));
+      }
+      return;
+    } catch (e) { log('ws binary send failed, falling back', e?.message); }
+  }
+  post({ id, event: 'data', data: Buffer.from(chunk).toString('base64') });
 }
 
 // ---- raw TCP tunnelling --------------------------------------------------
@@ -237,14 +271,15 @@ function openTcp(job) {
   if (!hostAllowed(host) || !portAllowed(port)) { post({ id, event: 'close', error: 'not allowed' }); return; }
   const sock = net.connect({ host, port });
   sockets.set(id, sock);
+  if (job.sidx !== undefined) sidxById.set(id, job.sidx);
   sock.on('connect', () => post({ id, event: 'open' }));
-  sock.on('data', (chunk) => post({ id, event: 'data', data: chunk.toString('base64') }));
-  sock.on('error', (e) => { post({ id, event: 'close', error: e.message }); sockets.delete(id); });
-  sock.on('close', () => { post({ id, event: 'close' }); sockets.delete(id); });
+  sock.on('data', (chunk) => postTcpData(id, chunk));
+  sock.on('error', (e) => { post({ id, event: 'close', error: e.message }); sockets.delete(id); sidxById.delete(id); });
+  sock.on('close', () => { post({ id, event: 'close' }); sockets.delete(id); sidxById.delete(id); });
   sock.setTimeout(0);
 }
 function dataTcp(job) { const s = sockets.get(job.id); if (s && job.data) s.write(Buffer.from(job.data, 'base64')); }
-function closeTcp(job) { const s = sockets.get(job.id); if (s) { s.end(); sockets.delete(job.id); } }
+function closeTcp(job) { const s = sockets.get(job.id); if (s) { s.end(); sockets.delete(job.id); } sidxById.delete(job.id); }
 
 // ---- LAN printer discovery (SSDP) ---------------------------------------
 // Runs on THIS connector's own network — where the printers actually are. The
@@ -441,6 +476,83 @@ function hostCidrs() {
 function primaryHostCidr() { return hostCidrs()[0] || ''; }
 
 // ---- SSE stream consumer -------------------------------------------------
+// Preferred transport: one multiplexed WebSocket carrying jobs down and results
+// up. Falls back to the SSE + POST pair when the control-plane is older or an
+// intermediary won't pass an upgrade, so a mixed-version fleet keeps working.
+//
+// Node's built-in WebSocket accepts an auth header (undici extension), which
+// matters: the alternative would be putting the connector token in the query
+// string, where every reverse proxy in the path writes it to an access log.
+async function connectWs() {
+  const url = `${CONFIG.controlUrl.replace(/^http/, 'ws')}/api/connector/ws`
+    + `?name=${encodeURIComponent(CONFIG.name)}&host_cidr=${encodeURIComponent(primaryHostCidr())}`;
+  return await new Promise((resolve, reject) => {
+    let settled = false;
+    let ws;
+    try {
+      ws = new WebSocket(url, { headers: { authorization: `Bearer ${CONFIG.token}`, ...clientAuthHeaders() } });
+    } catch (e) { return reject(e); }
+    ws.binaryType = 'arraybuffer';
+
+    // If the upgrade doesn't complete promptly, treat it as unsupported and let
+    // the caller fall back rather than stalling the connector.
+    const opening = setTimeout(() => { if (!settled) { settled = true; try { ws.close(); } catch { /* */ } reject(new Error('websocket upgrade timed out')); } }, 10000);
+
+    ws.onopen = () => {
+      clearTimeout(opening);
+      activeWs = ws;
+      log(`connected to ${CONFIG.controlUrl} as "${CONFIG.name}" over a multiplexed tunnel`);
+    };
+
+    ws.onmessage = (ev) => {
+      try {
+        if (typeof ev.data !== 'string') {
+          const buf = Buffer.from(ev.data);
+          if (buf.length < 5) return;
+          if (buf.readUInt8(0) !== 1) return;
+          const idx = buf.readUInt32BE(1);
+          for (const [id, i] of sidxById) {
+            if (i === idx) { const sock = sockets.get(id); if (sock) sock.write(buf.subarray(5)); return; }
+          }
+          return;
+        }
+        const job = JSON.parse(ev.data);
+        if (job && job.id && (job.host || job.kind)) handleJob(job);
+      } catch (e) { dbg('ws message error', e?.message); }
+    };
+
+    ws.onclose = (ev) => {
+      clearTimeout(opening);
+      if (activeWs === ws) activeWs = null;
+      sidxById.clear();
+      // 4401 is our own "auth rejected" close code. Tag it so main() backs off
+      // slowly and prints something the user can act on, instead of hammering.
+      if (ev && ev.code === 4401) {
+        const keyLocked = String(ev.reason || '').includes('client key');
+        const err = new Error(keyLocked
+          ? 'this connector is paired to a different client key. Open Settings \u2192 Connectors on your instance, use "Reset key", then restart the connector'
+          : `the connector token was rejected. Check the token in Settings \u2192 Connectors`);
+        err.authRejected = true;
+        err.keyLocked = keyLocked;
+        if (!settled) { settled = true; return reject(err); }
+        return;
+      }
+      if (!settled) { settled = true; return reject(new Error('websocket closed before it was usable')); }
+      resolve('closed');
+    };
+
+    ws.onerror = () => {
+      clearTimeout(opening);
+      if (!settled) { settled = true; reject(new Error('websocket connection failed')); }
+    };
+
+    // Resolve only when the session ends; main()'s loop treats a return as
+    // "reconnect", the same as it does for the SSE path.
+    const done = () => { if (!settled) settled = true; };
+    ws.addEventListener('close', done);
+  });
+}
+
 async function connectOnce() {
   const url = `${CONFIG.controlUrl}/api/connector/stream?name=${encodeURIComponent(CONFIG.name)}&host_cidr=${encodeURIComponent(primaryHostCidr())}`;
   const ac = new AbortController();
@@ -501,9 +613,30 @@ async function main() {
   log(`starting — control=${CONFIG.controlUrl} allow=[${CONFIG.allow.join(',')}] ports=[${CONFIG.allowPorts.join(',')}] signature-verification=${signPubKey ? 'ENFORCED' : 'off'} client-key=${clientKey ? 'on' : 'off'}`);
   if (clientPubPem) log(`this connector's public key (register it in Settings → Connectors):\n${clientPubPem.trim()}`);
   let backoff = CONFIG.reconnectMinMs;
+  // OPHQ_DISABLE_WS=1 forces the legacy transport, which is the first thing to
+  // try if a site turns out to have an intermediary that mangles websockets.
+  let useWs = process.env.OPHQ_DISABLE_WS !== '1';
+  let wsProven = false;
   for (;;) {
     try {
-      await connectOnce();
+      // Prefer the multiplexed tunnel; fall back to SSE for older control-planes
+      // or intermediaries that won't pass an upgrade. Once a tier has proven it
+      // supports the upgrade we stop re-probing on every reconnect, so a network
+      // that only breaks it intermittently doesn't cost a stall each time.
+      if (useWs) {
+        try {
+          await connectWs();
+          wsProven = true;
+        } catch (e) {
+          if (e?.authRejected) throw e;          // not a transport problem
+          if (wsProven) throw e;                 // it worked before; treat as a normal drop
+          log('multiplexed tunnel unavailable (' + (e?.message || 'unknown') + ') — using the compatibility stream');
+          useWs = false;
+          await connectOnce();
+        }
+      } else {
+        await connectOnce();
+      }
       backoff = CONFIG.reconnectMinMs;
     } catch (e) {
       // An auth rejection will not fix itself by retrying faster — it needs the
