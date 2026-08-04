@@ -615,14 +615,25 @@ async function main() {
   let backoff = CONFIG.reconnectMinMs;
   // OPHQ_DISABLE_WS=1 forces the legacy transport, which is the first thing to
   // try if a site turns out to have an intermediary that mangles websockets.
-  let useWs = process.env.OPHQ_DISABLE_WS !== '1';
+  const wsAllowed = process.env.OPHQ_DISABLE_WS !== '1';
+  let useWs = wsAllowed;
   let wsProven = false;
+  // Falling back must not be permanent. The upgrade also fails while the
+  // control-plane is restarting, and treating that as "this network can't do
+  // websockets" left the connector on the slow transport until someone noticed
+  // and restarted it. Re-probe periodically instead.
+  const WS_REPROBE_MS = Number(process.env.OPHQ_WS_REPROBE_MS || 10 * 60 * 1000);
+  let wsRetryAt = 0;
   for (;;) {
     try {
       // Prefer the multiplexed tunnel; fall back to SSE for older control-planes
       // or intermediaries that won't pass an upgrade. Once a tier has proven it
       // supports the upgrade we stop re-probing on every reconnect, so a network
       // that only breaks it intermittently doesn't cost a stall each time.
+      if (!useWs && wsAllowed && Date.now() >= wsRetryAt) {
+        log('re-checking whether the multiplexed tunnel is available');
+        useWs = true;
+      }
       if (useWs) {
         try {
           await connectWs();
@@ -630,8 +641,10 @@ async function main() {
         } catch (e) {
           if (e?.authRejected) throw e;          // not a transport problem
           if (wsProven) throw e;                 // it worked before; treat as a normal drop
-          log('multiplexed tunnel unavailable (' + (e?.message || 'unknown') + ') — using the compatibility stream');
+          log('multiplexed tunnel unavailable (' + (e?.message || 'unknown') + ') — using the compatibility stream'
+            + `, re-checking in ${Math.round(WS_REPROBE_MS / 60000)}m`);
           useWs = false;
+          wsRetryAt = Date.now() + WS_REPROBE_MS;
           await connectOnce();
         }
       } else {
