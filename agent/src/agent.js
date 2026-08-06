@@ -398,7 +398,15 @@ async function runCameraWebrtc(job) {
     if (Array.isArray(ice_servers) && ice_servers.length) await applyIceServers(ice_servers);
     let stream = name || ('p' + (job.printer_id || 'x'));
     if (vendor === 'bambu') {
-      if (!bambuSupportsRtsp(model)) return { ok: false, error: 'model has no RTSPS camera (A1/P1 chamber-image not supported)' };
+      // The control-plane decides this and sends `rtsp`. It has the vendor
+      // code-to-model table; the connector does not, and should not — when both
+      // sides kept their own model lists they drifted, and the X1 Carbon's own
+      // code went missing from one of them. `model` here is already the name the
+      // user knows ("H2D"), and is used for messages, not for decisions.
+      // The local check is only a fallback for an older control-plane that
+      // doesn't send the flag yet.
+      const hasRtsp = typeof job.rtsp === 'boolean' ? job.rtsp : bambuSupportsRtsp(model);
+      if (!hasRtsp) return { ok: false, error: `${model || 'this printer'} has no RTSPS camera; it uses the chamber-image protocol` };
       // Idempotent: re-registering after a go2rtc restart is the normal path.
       stream = await registerBambuStream({ name: stream, ip, accessCode: access_code });
     } else {
