@@ -156,12 +156,25 @@ export async function webrtcOffer(name, offer) {
 
 // Register a Bambu RTSPS source in the local go2rtc. Returns the stream name.
 export async function registerBambuStream({ name, ip, accessCode }) {
+  // Catch the empty cases here: without this both produce an indistinguishable
+  // 400 from go2rtc and the real cause stays invisible.
+  if (!ip) throw new Error('no printer address for the camera (direct_host missing)');
+  if (!accessCode) throw new Error('no printer access code for the camera');
   const src = `rtsps://bblp:${accessCode}@${ip}:322/streaming/live/1`;
   if (registered.get(name) === src) return name; // already registered, same src
   const up = await ensureGo2rtc();
   if (!up) throw new Error('go2rtc unavailable on the connector host');
   const r = await fetch(`${GO2RTC_API}/api/streams?name=${encodeURIComponent(name)}&src=${encodeURIComponent(src)}`, { method: 'PUT' });
-  if (!r.ok) throw new Error(`go2rtc register failed: ${r.status}`);
+  if (!r.ok) {
+    // A bare status code is not diagnosable. go2rtc explains itself in the body,
+    // and the source it rejected matters — a missing IP or access code produces
+    // the same 400 as a malformed URL. The access code is masked because this
+    // string travels to the cloud and into logs.
+    let body = '';
+    try { body = (await r.text()).trim().slice(0, 200); } catch { /* body optional */ }
+    const shown = src.replace(/:\/\/bblp:[^@]*@/, '://bblp:***@');
+    throw new Error(`go2rtc rejected the camera source (HTTP ${r.status}${body ? ': ' + body : ''}) for ${shown}`);
+  }
   registered.set(name, src);
   log('registered', name, '->', ip + ':322');
   return name;

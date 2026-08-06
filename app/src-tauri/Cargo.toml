@@ -1,6 +1,6 @@
 [package]
 name = "openprinthq-cloud-client"
-version = "0.0.7"
+version = "0.0.8"
 description = "OpenPrintHQ Cloud Client — tray/menu-bar app that supervises the local connector"
 authors = ["James Norman <norjms@gmail.com>"]
 license = "AGPL-3.0-or-later"
