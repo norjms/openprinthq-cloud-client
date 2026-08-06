@@ -28,9 +28,29 @@ function log(...a) { console.log('[camera]', ...a); }
 
 // Bambu internal model codes / marketing names that expose RTSPS on 322.
 // (A1/A1MINI/P1P/P1S use the chamber-image protocol on 6000 — not go2rtc-able.)
-const RTSP_MODELS = /^(x1|x1c|x1e|x2d|p2s|h2c|h2d|h2dpro|h2s|o1d|o1c2|o1c|c13|c11)/i;
+// Which Bambu models expose an RTSPS camera (as opposed to the A1/P1
+// chamber-image protocol, which go2rtc can't source).
+//
+// Printers report an SSDP devmodel code ("O1D"), not the marketing name
+// ("H2D"), and users sometimes rename them — so both forms have to match. This
+// MUST stay a superset of supportsRtsp() in the control-plane's go2rtc.js: when
+// the two disagreed, a printer worked on the cloud path and failed on the
+// connector path with "model has no RTSPS camera", which reads like a camera
+// bug rather than a list mismatch. BL-P001 (the X1 Carbon) was in exactly that
+// gap.
+const RTSP_PREFIXES = /^(x1|x2|h2|p2)/i;
+const RTSP_DEVMODELS = new Set([
+  'BLP001',                                   // X1 / X1 Carbon
+  'C11', 'C13',
+  'N6', 'N7',
+  'O1C', 'O1C2',                              // H2C
+  'O1D',                                      // H2D
+  'O1S', 'O1E', 'O2D'
+]);
 export function bambuSupportsRtsp(model) {
-  return !!model && RTSP_MODELS.test(String(model).replace(/[\s_-]/g, ''));
+  if (!model) return false;
+  const m = String(model).replace(/[\s_-]/g, '').toUpperCase();
+  return RTSP_PREFIXES.test(m) || RTSP_DEVMODELS.has(m);
 }
 
 async function isGo2rtcUp() {
