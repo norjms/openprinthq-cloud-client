@@ -31,7 +31,9 @@ function Get-File($src, $dst) {
   for ($i = 1; $i -le 3; $i++) {
     try {
       if ($curl) {
-        & curl.exe -fL --retry 3 --retry-delay 2 --connect-timeout 20 -o $dst $src
+        # curl writes progress to stderr and PowerShell treats native stderr as a
+        # terminating error, so a good download looked like a failure.
+        & curl.exe -fL --no-progress-meter --retry 3 --retry-delay 2 --connect-timeout 20 -o $dst $src 2>$null
         if ($LASTEXITCODE -eq 0 -and (Test-Path $dst) -and (Get-Item $dst).Length -gt 500kb) { return }
       } else {
         $ProgressPreference = "SilentlyContinue"

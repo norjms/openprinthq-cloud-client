@@ -35,7 +35,11 @@ function Get-File($src, $dst) {
   for ($i = 1; $i -le 3; $i++) {
     try {
       if ($curl) {
-        & curl.exe -fL --retry 3 --retry-delay 2 --connect-timeout 20 -o $dst $src
+        # --no-progress-meter matters: curl writes its progress bar to stderr,
+        # and PowerShell surfaces native stderr as a terminating error, so a
+        # perfectly good download reported "attempt failed: % Total % Received".
+        # 2>$null belts-and-braces it for older curl builds without the flag.
+        & curl.exe -fL --no-progress-meter --retry 3 --retry-delay 2 --connect-timeout 20 -o $dst $src 2>$null
         if ($LASTEXITCODE -eq 0 -and (Test-Path $dst) -and (Get-Item $dst).Length -gt 1mb) { return }
       } else {
         $old = $ProgressPreference; $ProgressPreference = "SilentlyContinue"
