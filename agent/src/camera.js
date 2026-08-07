@@ -209,13 +209,19 @@ function iceChanged(next) {
   return iceFingerprint(next) !== iceFingerprint(currentIce);
 }
 export async function applyIceServers(ice) {
+  // If go2rtc is not running yet, just record them: it will start with these
+  // servers in its config, so a restart would be pointless work.
+  if (!go2rtcProc) { currentIce = Array.isArray(ice) ? ice : []; return false; }
   if (!iceChanged(ice)) return false;
   currentIce = Array.isArray(ice) ? ice : [];
   if (go2rtcProc) {
-    log('ICE servers changed — restarting go2rtc to pick them up');
+    log('ICE servers changed - restarting go2rtc to pick them up');
     try { go2rtcProc.kill(); } catch { /* already gone */ }
     go2rtcProc = null;
     await new Promise((r) => setTimeout(r, 300));
+    // Bring the streams back with it, or the request that triggered this will
+    // find nothing and every camera dies at the moment live view is opened.
+    if (await ensureGo2rtc()) await restoreStreams();
   }
   return true;
 }
@@ -254,9 +260,26 @@ export async function streamRegistered(name) {
   } catch { return false; }
 }
 
+// Restore every stream we know about after go2rtc starts.
+//
+// ensureGo2rtc rewrites the config file on each start, which overwrites the
+// streams go2rtc persisted into it -- so any restart silently lost them and the
+// next request failed with "stream not found". Rather than try to preserve a
+// file go2rtc also owns, keep the registrations in memory and replay them.
+async function restoreStreams() {
+  for (const [name, src] of [...registered]) {
+    try {
+      await fetch(`${GO2RTC_API}/api/streams?name=${encodeURIComponent(name)}&src=${encodeURIComponent(src)}`,
+        { method: 'PUT', signal: AbortSignal.timeout(5000) });
+    } catch { registered.delete(name); }
+  }
+}
+
 export async function ensureGo2rtcRunning() {
   if (await isGo2rtcUp()) return true;
-  return ensureGo2rtc();
+  const up = await ensureGo2rtc();
+  if (up) await restoreStreams();
+  return up;
 }
 
 export async function registerBambuStream({ name, ip, accessCode }) {
