@@ -563,7 +563,6 @@ async fn check_update() -> Result<UpdateInfo, String> {
     .map_err(|e| e.to_string())?
 }
 
-#[derive(Serialize, Deserialize)]
 fn chrono_now() -> String {
     // Seconds since the epoch is enough to correlate with server-side logs and
     // avoids adding a date dependency for one line of output.
@@ -573,6 +572,7 @@ fn chrono_now() -> String {
     }
 }
 
+#[derive(Serialize, Deserialize)]
 pub struct ValidateResult {
     ok: bool,
     status: u16,
