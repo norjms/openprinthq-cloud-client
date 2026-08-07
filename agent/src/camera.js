@@ -18,6 +18,19 @@
 
 import { spawn } from 'node:child_process';
 import net from 'node:net';
+import path from 'node:path';
+import os from 'node:os';
+import { writeFileSync, mkdirSync } from 'node:fs';
+
+// Somewhere writable for go2rtc's config. Prefer the directory already holding
+// the connector's key so all agent state lives together; fall back to the OS
+// temp dir, which is always writable even for a packaged install.
+function stateDir() {
+  const keyFile = process.env.OPHQ_CLIENT_KEY_FILE;
+  const dir = keyFile ? path.dirname(keyFile) : path.join(os.tmpdir(), 'openprinthq');
+  try { mkdirSync(dir, { recursive: true }); return dir; }
+  catch { const t = path.join(os.tmpdir(), 'openprinthq'); mkdirSync(t, { recursive: true }); return t; }
+}
 
 const GO2RTC_API = 'http://127.0.0.1:1984';
 let go2rtcProc = null;
@@ -75,8 +88,14 @@ export async function ensureGo2rtc() {
       // Point go2rtc at the bundled ffmpeg (RTSPS->MJPEG transcode) when present,
       // and bind its API to localhost only.
       const ffmpegBin = process.env.OPHQ_FFMPEG_BIN;
-      const cfg = buildConfig(ffmpegBin, currentIce);
-      go2rtcProc = spawn(go2rtcBin, ['-config', cfg], { stdio: 'ignore', detached: false });
+      // go2rtc MUST be given a config FILE, not an inline JSON string. With an
+      // inline config it has nowhere to persist changes, so every write through
+      // the API is refused with "400: config file disabled" — which is exactly
+      // how camera registration failed: the RTSPS source was always valid, but
+      // PUT /api/streams could never be accepted.
+      const cfgPath = path.join(stateDir(), 'go2rtc.json');
+      writeFileSync(cfgPath, buildConfig(ffmpegBin, currentIce), 'utf8');
+      go2rtcProc = spawn(go2rtcBin, ['-config', cfgPath], { stdio: 'ignore', detached: false });
       go2rtcProc.on('exit', (code) => { log('go2rtc exited', code); go2rtcProc = null; });
       // wait up to ~5s for it to come up
       for (let i = 0; i < 25; i++) {
