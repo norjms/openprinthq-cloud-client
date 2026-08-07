@@ -39,13 +39,16 @@ command -v cargo-tauri >/dev/null || { echo 'cargo-tauri not found — cargo ins
 
 if [ "$OS" = linux ] && command -v pkg-config >/dev/null; then
   missing=""
-  for p in webkit2gtk-4.1 libsoup-3.0 javascriptcoregtk-4.1; do
+  # ayatana-appindicator is easy to miss: without it tauri-cli does not fail the
+  # dependency check, it panics mid-build with "Can't detect any appindicator
+  # library", which reads like a tooling bug rather than a missing package.
+  for p in webkit2gtk-4.1 libsoup-3.0 javascriptcoregtk-4.1 ayatana-appindicator3-0.1; do
     pkg-config --exists "$p" 2>/dev/null || missing="$missing $p"
   done
   if [ -n "$missing" ]; then
     echo "missing dev packages:$missing" >&2
-    echo "  Debian/Ubuntu: sudo apt install libwebkit2gtk-4.1-dev libsoup-3.0-dev libjavascriptcoregtk-4.1-dev librsvg2-dev patchelf" >&2
-    echo "  Fedora:        sudo dnf install webkit2gtk4.1-devel libsoup3-devel librsvg2-devel" >&2
+    echo "  Debian/Ubuntu: sudo apt install libwebkit2gtk-4.1-dev libsoup-3.0-dev libjavascriptcoregtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf" >&2
+    echo "  Fedora:        sudo dnf install webkit2gtk4.1-devel libsoup3-devel libayatana-appindicator-gtk3-devel librsvg2-devel" >&2
     exit 1
   fi
 fi
