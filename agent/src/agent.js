@@ -28,7 +28,7 @@ import os from 'node:os';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import { configureLogShipping, shipLog } from './logship.js';
-import { registerBambuStream, localFrameUrl, localMjpegUrl, bambuSupportsRtsp, webrtcOffer, applyIceServers } from './camera.js';
+import { ensureGo2rtcRunning, registerBambuStream, localFrameUrl, localMjpegUrl, bambuSupportsRtsp, webrtcOffer, applyIceServers } from './camera.js';
 
 function readPubKey() {
   const inline = process.env.OPHQ_SIGNING_PUBKEY;
@@ -447,10 +447,24 @@ async function runCameraRegister(job) {
 // Fetch one JPEG frame locally and relay it up. For Bambu, from the local
 // go2rtc single-frame endpoint; for Klipper, from the webcam snapshot URL.
 async function runCameraFrame(job) {
-  const { vendor, name, snapshot_url } = job;
+  const { vendor, name, snapshot_url, ip, access_code } = job;
   let url;
-  if (vendor === 'bambu') url = localFrameUrl(name || ('p' + (job.printer_id || 'x')));
-  else url = snapshot_url; // klipper/external: absolute local webcam snapshot URL
+  if (vendor === 'bambu') {
+    // go2rtc was only ever started as a side effect of registration, and the
+    // control-plane skips registration for a printer whose camera is already
+    // enabled. So once go2rtc stopped -- a crash, a client restart, anything --
+    // nothing brought it back and every frame failed indefinitely while the
+    // config on disk looked perfectly correct. Ensure it here, where frames are
+    // actually served, and re-register the stream if it was lost with it.
+    const stream = name || ('p' + (job.printer_id || 'x'));
+    try {
+      await ensureGo2rtcRunning();
+      if (ip && access_code) await registerBambuStream({ name: stream, ip, accessCode: access_code });
+    } catch (e) { return { status: 502, error: e?.message || 'camera host unavailable' }; }
+    url = localFrameUrl(stream);
+  } else {
+    url = snapshot_url; // klipper/external: absolute local webcam snapshot URL
+  }
   if (!url) return { status: 502, error: 'no camera url' };
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), 8000);

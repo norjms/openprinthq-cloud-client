@@ -227,6 +227,11 @@ export async function webrtcOffer(name, offer) {
 }
 
 // Register a Bambu RTSPS source in the local go2rtc. Returns the stream name.
+export async function ensureGo2rtcRunning() {
+  if (await isGo2rtcUp()) return true;
+  return ensureGo2rtc();
+}
+
 export async function registerBambuStream({ name, ip, accessCode }) {
   // Catch the empty cases here: without this both produce an indistinguishable
   // 400 from go2rtc and the real cause stays invisible.
