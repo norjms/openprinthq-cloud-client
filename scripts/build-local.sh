@@ -74,10 +74,19 @@ if [ "$SKIP_FETCH" -eq 0 ]; then
   done
 fi
 
-echo "==> cargo tauri build"
-( cd app && cargo tauri build --bundles "$BUNDLES" )
+if [ "$OS" = macos ]; then
+  # macOS has its own assembly: a universal .app from both arches, then
+  # productbuild into the .pkg that actually ships. build-local.sh stopping at
+  # --bundles app produced a .app directory, which is not a distributable file
+  # and silently yielded an empty dist/.
+  echo "==> build-macos.sh (universal .app -> .pkg)"
+  VERSION="$VER" TARGET=universal-apple-darwin bash scripts/build-macos.sh
+else
+  echo "==> cargo tauri build"
+  ( cd app && cargo tauri build --bundles "$BUNDLES" )
+fi
 
 mkdir -p "$ROOT/dist"
-find app/src-tauri/target/release/bundle -type f \( -name '*.deb' -o -name '*.rpm' -o -name '*.dmg' -o -name '*.app.tar.gz' \) \
+find . app/src-tauri/target/release/bundle -maxdepth 4 -type f \( -name '*.deb' -o -name '*.rpm' -o -name '*.pkg' -o -name '*.dmg' \) \
   -exec cp {} "$ROOT/dist/" \; -exec sh -c 'printf "  %s  %.1f MB\n" "$(basename "$1")" "$(echo "scale=1; $(stat -c%s "$1" 2>/dev/null || stat -f%z "$1")/1048576" | bc)"' _ {} \;
 echo "artifacts in $ROOT/dist"
