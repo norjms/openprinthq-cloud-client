@@ -50,6 +50,8 @@ pub struct Config {
     #[serde(default)]
     pub allow_ports: String,
     #[serde(default)]
+    pub log_url: String,
+    #[serde(default)]
     pub signing_pubkey: String,
     /// Optional "host" or "host:port" used by the connectivity self-test.
     #[serde(default)]
@@ -247,6 +249,12 @@ fn agent_env(cfg: &Config, key_path: &PathBuf) -> HashMap<String, String> {
     env.insert("OPHQ_CONNECTOR_NAME".into(), name);
     if !cfg.allow.is_empty() {
         env.insert("OPHQ_ALLOW".into(), cfg.allow.clone());
+    }
+    // Opt-in log shipping. Empty means the connector ships nothing, which is the
+    // default: these logs describe the user's own printers and network, so the
+    // destination is theirs to choose and there is no vendor fallback.
+    if !cfg.log_url.is_empty() {
+        env.insert("OPHQ_LOG_URL".into(), cfg.log_url.clone());
     }
     if !cfg.allow_ports.is_empty() {
         env.insert("OPHQ_ALLOW_PORTS".into(), cfg.allow_ports.clone());

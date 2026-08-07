@@ -27,6 +27,7 @@ import dgram from 'node:dgram';
 import os from 'node:os';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
+import { configureLogShipping, shipLog } from './logship.js';
 import { registerBambuStream, localFrameUrl, localMjpegUrl, bambuSupportsRtsp, webrtcOffer, applyIceServers } from './camera.js';
 
 function readPubKey() {
@@ -57,18 +58,30 @@ const CONFIG = {
   reconnectMaxMs: 30000,
   // Auth failures need user action, not a retry storm.
   authRetryMs: Number(process.env.OPHQ_AUTH_RETRY_MS || 60000),
+  // User-configured log destination. Empty means ship nothing, which is the
+  // default: these logs describe the user's own printers and network.
+  logUrl: (process.env.OPHQ_LOG_URL || '').trim(),
   requestTimeoutMs: Number(process.env.OPHQ_REQUEST_TIMEOUT_MS || 20000)
 };
 
 // Logs go to stderr so stdout stays clean (e.g. for `--pubkey`).
-function log(...a) { console.error(new Date().toISOString(), '[connector]', ...a); }
+function log(...a) {
+  const line = [new Date().toISOString(), '[connector]', ...a].join(' ');
+  console.error(line);
+  shipLog(line);
+}
 function fail(msg) { console.error('FATAL:', msg); process.exit(1); }
 
 // Verbose tracing — set OPHQ_DEBUG=1 to see every job the connector receives and
 // every request/probe it performs on the LAN (helps trace where a scan or a
 // printer call breaks down). Off by default so normal logs stay quiet.
 const DEBUG = /^(1|true|yes|on)$/i.test(process.env.OPHQ_DEBUG || '');
-function dbg(...a) { if (DEBUG) console.error(new Date().toISOString(), '[connector][debug]', ...a); }
+function dbg(...a) {
+  if (!DEBUG) return;
+  const line = [new Date().toISOString(), '[connector][debug]', ...a].join(' ');
+  console.error(line);
+  shipLog(line);
+}
 
 // ---- command signature verification (optional but recommended) -----------
 const PSS = { padding: crypto.constants.RSA_PKCS1_PSS_PADDING, saltLength: crypto.constants.RSA_PSS_SALTLEN_DIGEST };
@@ -620,6 +633,10 @@ async function main() {
   if (!CONFIG.token) fail('OPHQ_CONNECTOR_TOKEN is required (create one in Settings → Connectors)');
   log(`starting — control=${CONFIG.controlUrl} allow=[${CONFIG.allow.join(',')}] ports=[${CONFIG.allowPorts.join(',')}] signature-verification=${signPubKey ? 'ENFORCED' : 'off'} client-key=${clientKey ? 'on' : 'off'}`);
   if (clientPubPem) log(`this connector's public key (register it in Settings → Connectors):\n${clientPubPem.trim()}`);
+  // Opt-in only: nothing ships unless the user set a destination themselves.
+  if (configureLogShipping({ url: CONFIG.logUrl, name: CONFIG.name })) {
+    log(`shipping logs to ${CONFIG.logUrl}`);
+  }
   let backoff = CONFIG.reconnectMinMs;
   // OPHQ_DISABLE_WS=1 forces the legacy transport, which is the first thing to
   // try if a site turns out to have an intermediary that mangles websockets.
