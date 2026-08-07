@@ -98,6 +98,21 @@ if (Test-Path "$State\connector-key.pem") { Write-Host "pairing key present -- t
 else { Write-Host "no pairing key -- this connector will pair fresh on first connect" -ForegroundColor Yellow }
 
 if (-not $KeepRunning) {
-  $exe = Get-ChildItem "$env:PROGRAMFILES\OpenPrintHQ Cloud Client" -Filter *.exe -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
-  if ($exe) { Write-Host "==> starting $($exe.Name)"; Start-Process $exe.FullName }
+  # Name it explicitly. The install dir also holds the bundled sidecars
+  # (ffmpeg, go2rtc, ophq-node) and "first .exe found" picks ffmpeg, which
+  # starts, prints usage and exits -- leaving nothing running while the script
+  # cheerfully reports success.
+  $exe = Join-Path "$env:PROGRAMFILES\OpenPrintHQ Cloud Client" 'openprinthq-cloud-client.exe'
+  if (Test-Path $exe) {
+    Write-Host "==> starting the client"
+    Start-Process $exe
+    Start-Sleep -Seconds 3
+    if (Get-Process -Name 'openprinthq-cloud-client' -ErrorAction SilentlyContinue) {
+      Write-Host "client is running" -ForegroundColor Green
+    } else {
+      Write-Host "client did not stay running -- start it from the Start menu and check its log" -ForegroundColor Yellow
+    }
+  } else {
+    Write-Host "could not find openprinthq-cloud-client.exe -- start it from the Start menu" -ForegroundColor Yellow
+  }
 }
