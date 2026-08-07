@@ -86,10 +86,35 @@ impl AppState {
             if t.is_empty() {
                 continue;
             }
+            Self::append_log_file(t);
             l.push_back(t.to_string());
             while l.len() > 800 {
                 l.pop_front();
             }
+        }
+    }
+
+    /// Mirror the connector's output to a file next to its config.
+    ///
+    /// The in-memory ring buffer above is only visible in the app window, which
+    /// is no help when the machine is remote, when the app is running headless,
+    /// or when diagnosing something that happened before anyone opened the UI.
+    /// Capped so an unattended connector cannot fill the disk.
+    fn append_log_file(line: &str) {
+        use std::io::Write;
+        let dir = std::path::PathBuf::from(
+            std::env::var("PROGRAMDATA").unwrap_or_else(|_| "/var/lib".into()),
+        )
+        .join("openprinthq");
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("connector.log");
+        if let Ok(meta) = std::fs::metadata(&path) {
+            if meta.len() > 8 * 1024 * 1024 {
+                let _ = std::fs::rename(&path, dir.join("connector.log.1"));
+            }
+        }
+        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+            let _ = writeln!(f, "{} {}", chrono_now(), line);
         }
     }
 }
@@ -539,6 +564,15 @@ async fn check_update() -> Result<UpdateInfo, String> {
 }
 
 #[derive(Serialize, Deserialize)]
+fn chrono_now() -> String {
+    // Seconds since the epoch is enough to correlate with server-side logs and
+    // avoids adding a date dependency for one line of output.
+    match std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
+        Ok(d) => format!("[{}]", d.as_secs()),
+        Err(_) => "[?]".to_string(),
+    }
+}
+
 pub struct ValidateResult {
     ok: bool,
     status: u16,
