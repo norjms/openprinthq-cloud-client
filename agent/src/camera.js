@@ -16,7 +16,7 @@
 // Klipper/Moonraker webcams are already plain HTTP MJPEG on the host; those are
 // fetched locally the same way with no go2rtc needed.
 
-import { spawn } from 'node:child_process';
+import { spawn, execFileSync } from 'node:child_process';
 import net from 'node:net';
 import path from 'node:path';
 import os from 'node:os';
@@ -25,6 +25,15 @@ import { writeFileSync, mkdirSync, existsSync, unlinkSync } from 'node:fs';
 // Somewhere writable for go2rtc's config. Prefer the directory already holding
 // the connector's key so all agent state lives together; fall back to the OS
 // temp dir, which is always writable even for a packaged install.
+function shortPathIfNeeded(p) {
+  if (!p || process.platform !== 'win32' || !p.includes(' ')) return p;
+  try {
+    const out = execFileSync('cmd.exe', ['/c', 'for %I in ("' + p + '") do @echo %~sI'], { encoding: 'utf8' });
+    const short = out.trim().split(/\r?\n/).pop().trim();
+    return short && !short.includes(' ') ? short : p;
+  } catch { return p; }
+}
+
 function stateDir() {
   const keyFile = process.env.OPHQ_CLIENT_KEY_FILE;
   const dir = keyFile ? path.dirname(keyFile) : path.join(os.tmpdir(), 'openprinthq');
@@ -87,7 +96,11 @@ export async function ensureGo2rtc() {
       const go2rtcBin = process.env.OPHQ_GO2RTC_BIN || 'go2rtc';
       // Point go2rtc at the bundled ffmpeg (RTSPS->MJPEG transcode) when present,
       // and bind its API to localhost only.
-      const ffmpegBin = process.env.OPHQ_FFMPEG_BIN;
+      // go2rtc splits ffmpeg.bin on whitespace when it builds the command, so a
+      // path like "C:\\Program Files\\..." becomes argv[0]="C:\\Program" and it
+      // reports "executable file not found in %PATH%". Hand it the 8.3 short
+      // path on Windows, which has no spaces.
+      const ffmpegBin = shortPathIfNeeded(process.env.OPHQ_FFMPEG_BIN);
       // go2rtc MUST be given a config FILE, not an inline JSON string. With an
       // inline config it has nowhere to persist changes, so every write through
       // the API is refused with "400: config file disabled" — which is exactly
@@ -149,7 +162,17 @@ function buildConfig(ffmpegBin, ice) {
     if (s.credential) lines.push(`      credential: ${yamlQuote(s.credential)}`);
   }
   lines.push('log:', '  level: warn');
-  if (ffmpegBin) lines.push('ffmpeg:', `  bin: ${yamlQuote(ffmpegBin)}`);
+  if (ffmpegBin) {
+    lines.push('ffmpeg:', `  bin: ${yamlQuote(ffmpegBin)}`);
+    // Bambu printers present a self-signed certificate on their RTSPS port.
+    // go2rtc's native RTSPS client cannot accept it (on Windows the handshake
+    // fails inside SChannel with 0x80090325 and the producer simply stops ~60ms
+    // after starting, logging nothing), so the stream is pulled with ffmpeg
+    // instead. -tls_verify 0 has to precede -i, which is why this is an input
+    // TEMPLATE rather than an extra argument: go2rtc appends raw args after the
+    // input, where ffmpeg rejects them.
+    lines.push("  bambu: '-rtsp_transport tcp -tls_verify 0 -i {input}'");
+  }
   lines.push('');
   return lines.join('\n');
 }
@@ -201,7 +224,14 @@ export async function registerBambuStream({ name, ip, accessCode }) {
   // 400 from go2rtc and the real cause stays invisible.
   if (!ip) throw new Error('no printer address for the camera (direct_host missing)');
   if (!accessCode) throw new Error('no printer access code for the camera');
-  const src = `rtsps://bblp:${accessCode}@${ip}:322/streaming/live/1`;
+  // Bambu printers present a self-signed certificate on their RTSPS port, so
+  // verification must be disabled or the TLS handshake is refused before any
+  // video flows. On Windows this surfaced as SChannel error 0x80090325
+  // ("Creating security context failed") and go2rtc simply stopped the producer
+  // ~60ms after starting it, with no indication why. The connection is to a
+  // printer on the local network using a per-device access code, so there is no
+  // meaningful trust being given up here.
+  const src = `ffmpeg:rtsps://bblp:${accessCode}@${ip}:322/streaming/live/1#input=bambu#video=copy`;
   if (registered.get(name) === src) return name; // already registered, same src
   const up = await ensureGo2rtc();
   if (!up) throw new Error('go2rtc unavailable on the connector host');
