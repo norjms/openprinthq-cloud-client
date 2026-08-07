@@ -28,7 +28,7 @@ import os from 'node:os';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import { configureLogShipping, shipLog } from './logship.js';
-import { ensureGo2rtcRunning, registerBambuStream, localFrameUrl, localMjpegUrl, bambuSupportsRtsp, webrtcOffer, applyIceServers } from './camera.js';
+import { ensureGo2rtcRunning, registerMjpegStream, registerBambuStream, localFrameUrl, localMjpegUrl, bambuSupportsRtsp, webrtcOffer, applyIceServers } from './camera.js';
 
 function readPubKey() {
   const inline = process.env.OPHQ_SIGNING_PUBKEY;
@@ -424,8 +424,14 @@ async function runCameraWebrtc(job) {
       if (!hasRtsp) return { ok: false, error: `${model || 'this printer'} has no RTSPS camera; it uses the chamber-image protocol` };
       // Idempotent: re-registering after a go2rtc restart is the normal path.
       stream = await registerBambuStream({ name: stream, ip, accessCode: access_code });
+    } else if (job.snapshot_url || job.stream_url) {
+      // Moonraker serves MJPEG alongside the snapshot endpoint, so derive the
+      // stream URL when the control-plane did not supply one.
+      const streamUrl = job.stream_url
+        || String(job.snapshot_url).replace(/action=snapshot/i, 'action=stream');
+      stream = await registerMjpegStream({ name: stream, url: streamUrl });
     } else {
-      return { ok: false, error: 'WebRTC camera is only available for RTSPS-capable printers' };
+      return { ok: false, error: 'no camera source for this printer' };
     }
     const answer = await webrtcOffer(stream, offer);
     return { ok: true, stream, answer };
