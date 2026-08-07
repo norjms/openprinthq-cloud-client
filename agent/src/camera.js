@@ -20,7 +20,7 @@ import { spawn } from 'node:child_process';
 import net from 'node:net';
 import path from 'node:path';
 import os from 'node:os';
-import { writeFileSync, mkdirSync } from 'node:fs';
+import { writeFileSync, mkdirSync, existsSync, unlinkSync } from 'node:fs';
 
 // Somewhere writable for go2rtc's config. Prefer the directory already holding
 // the connector's key so all agent state lives together; fall back to the OS
@@ -93,7 +93,12 @@ export async function ensureGo2rtc() {
       // the API is refused with "400: config file disabled" — which is exactly
       // how camera registration failed: the RTSPS source was always valid, but
       // PUT /api/streams could never be accepted.
-      const cfgPath = path.join(stateDir(), 'go2rtc.json');
+      // Named .yaml now. Any go2rtc.json left by an earlier build is JSON with
+      // yaml appended and will never parse again, so remove it rather than
+      // leaving a file that permanently breaks startup.
+      const stale = path.join(stateDir(), 'go2rtc.json');
+      try { if (existsSync(stale)) unlinkSync(stale); } catch { /* best effort */ }
+      const cfgPath = path.join(stateDir(), 'go2rtc.yaml');
       writeFileSync(cfgPath, buildConfig(ffmpegBin, currentIce), 'utf8');
       go2rtcProc = spawn(go2rtcBin, ['-config', cfgPath], { stdio: 'ignore', detached: false });
       go2rtcProc.on('exit', (code) => { log('go2rtc exited', code); go2rtcProc = null; });
@@ -122,14 +127,31 @@ export async function ensureGo2rtc() {
 // negotiation simply never completes.
 const WEBRTC_PORT = process.env.OPHQ_GO2RTC_WEBRTC_PORT || '18555';
 let currentIce = [];
+// Emit YAML, not JSON. go2rtc persists API changes by APPENDING yaml to this
+// file, so a file that starts as a JSON object ends up as a JSON object with
+// yaml stuck on the end: valid as neither. It parses on first run, accepts the
+// stream registration, writes itself, and then fails to start ever again. YAML
+// from the outset means what go2rtc appends stays consistent with what we wrote.
+function yamlQuote(v) { return "'" + String(v).replace(/'/g, "''") + "'"; }
 function buildConfig(ffmpegBin, ice) {
-  const cfg = {
-    api: { listen: '127.0.0.1:1984' },
-    webrtc: { listen: `:${WEBRTC_PORT}`, ice_servers: ice && ice.length ? ice : [{ urls: 'stun:stun.cloudflare.com:3478' }] },
-    log: { level: 'warn' }
-  };
-  if (ffmpegBin) cfg.ffmpeg = { bin: ffmpegBin };
-  return JSON.stringify(cfg);
+  const servers = ice && ice.length ? ice : [{ urls: 'stun:stun.cloudflare.com:3478' }];
+  const lines = [
+    'api:',
+    "  listen: '127.0.0.1:1984'",
+    'webrtc:',
+    `  listen: ':${WEBRTC_PORT}'`,
+    '  ice_servers:'
+  ];
+  for (const s of servers) {
+    const urls = [].concat(s.urls || []);
+    lines.push(`    - urls: [${urls.map(yamlQuote).join(', ')}]`);
+    if (s.username) lines.push(`      username: ${yamlQuote(s.username)}`);
+    if (s.credential) lines.push(`      credential: ${yamlQuote(s.credential)}`);
+  }
+  lines.push('log:', '  level: warn');
+  if (ffmpegBin) lines.push('ffmpeg:', `  bin: ${yamlQuote(ffmpegBin)}`);
+  lines.push('');
+  return lines.join('\n');
 }
 
 // go2rtc reads ice_servers at startup, so a changed credential set means a
