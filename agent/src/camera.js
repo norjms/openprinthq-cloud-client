@@ -252,6 +252,29 @@ export async function webrtcOffer(name, offer) {
 }
 
 // Register a Bambu RTSPS source in the local go2rtc. Returns the stream name.
+// Klipper/Moonraker webcams serve MJPEG, which go2rtc can ingest and re-publish
+// as WebRTC. Without this a Klipper printer could only ever show relayed still
+// frames, while the Bambus went live -- the same camera on a different printer
+// behaving differently for no reason the user can see.
+//
+// Transcoding to H264 is required: browsers will not accept MJPEG over WebRTC.
+export async function registerMjpegStream({ name, url }) {
+  if (!url) throw new Error('no webcam URL for this printer');
+  const src = `ffmpeg:${url}#video=h264`;
+  if (registered.get(name) === src) return name;
+  const up = await ensureGo2rtcRunning();
+  if (!up) throw new Error('go2rtc unavailable on the connector host');
+  const r = await fetch(`${GO2RTC_API}/api/streams?name=${encodeURIComponent(name)}&src=${encodeURIComponent(src)}`, { method: 'PUT' });
+  if (!r.ok) {
+    let body = '';
+    try { body = (await r.text()).trim().slice(0, 200); } catch { /* optional */ }
+    throw new Error(`go2rtc rejected the webcam stream (HTTP ${r.status}${body ? ': ' + body : ''}) for ${url}`);
+  }
+  registered.set(name, src);
+  log('registered', name, '-> mjpeg', url);
+  return name;
+}
+
 export async function streamRegistered(name) {
   try {
     const r = await fetch(`${GO2RTC_API}/api/streams`, { signal: AbortSignal.timeout(4000) });
