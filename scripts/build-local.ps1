@@ -13,6 +13,10 @@ $ProgressPreference = 'SilentlyContinue'
 
 $root = Split-Path $PSScriptRoot -Parent
 Set-Location $root
+# cargo tauri rewrites Cargo.lock during the build, so switching tags in a reused
+# checkout fails with "local changes would be overwritten" — which silently
+# rebuilt the previous tag instead of the requested one.
+& git -C $root checkout -- app/src-tauri/Cargo.lock 2>$null
 $conf = "$root\app\src-tauri\tauri.conf.json"
 
 foreach ($t in 'cargo','node','cargo-tauri') {
