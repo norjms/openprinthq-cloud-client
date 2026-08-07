@@ -189,9 +189,24 @@ function buildConfig(ffmpegBin, ice) {
 // respawn. Cloudflare TURN credentials are short-lived, so this happens on a
 // normal cadence rather than only at install time. Streams are re-registered on
 // demand, so a respawn costs one reconnect, not lost configuration.
+// Compare ICE servers by their URLS ONLY, never by credentials.
+//
+// Cloudflare mints short-lived TURN credentials, so a fresh set arrives with
+// every request and a naive deep-compare saw a change every single time. Each
+// "change" restarted go2rtc, which wiped every registered stream, so opening a
+// live view destroyed the very stream it was about to play and every camera
+// died with "stream not found". The URLs are what go2rtc actually needs at
+// startup; rotating credentials do not warrant a restart.
+function iceFingerprint(list) {
+  try {
+    return (list || [])
+      .map((s) => [].concat(s.urls || []).join(','))
+      .sort()
+      .join('|');
+  } catch { return ''; }
+}
 function iceChanged(next) {
-  try { return JSON.stringify(next || []) !== JSON.stringify(currentIce || []); }
-  catch { return true; }
+  return iceFingerprint(next) !== iceFingerprint(currentIce);
 }
 export async function applyIceServers(ice) {
   if (!iceChanged(ice)) return false;
@@ -211,6 +226,10 @@ export async function applyIceServers(ice) {
 export async function webrtcOffer(name, offer) {
   const up = (await isGo2rtcUp()) || (await ensureGo2rtc());
   if (!up) throw new Error('go2rtc unavailable on the connector host');
+  // The frame path already re-registers a lost stream; this one did not, so a
+  // go2rtc restart left live view answering "stream not found" indefinitely
+  // while snapshots quietly recovered.
+  if (!(await streamRegistered(name))) throw new Error(`stream ${name} is not registered`);
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 15000);
   try {
@@ -227,6 +246,14 @@ export async function webrtcOffer(name, offer) {
 }
 
 // Register a Bambu RTSPS source in the local go2rtc. Returns the stream name.
+export async function streamRegistered(name) {
+  try {
+    const r = await fetch(`${GO2RTC_API}/api/streams`, { signal: AbortSignal.timeout(4000) });
+    if (!r.ok) return false;
+    return Object.prototype.hasOwnProperty.call(await r.json(), name);
+  } catch { return false; }
+}
+
 export async function ensureGo2rtcRunning() {
   if (await isGo2rtcUp()) return true;
   return ensureGo2rtc();

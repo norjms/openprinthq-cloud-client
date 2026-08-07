@@ -408,6 +408,8 @@ async function runCameraWebrtc(job) {
   const { vendor, ip, access_code, model, name, offer, ice_servers } = job;
   try {
     if (!offer) return { ok: false, error: 'no SDP offer supplied' };
+    // Apply ICE BEFORE registering: applyIceServers may restart go2rtc, and a
+    // restart after registration would discard the stream we just created.
     if (Array.isArray(ice_servers) && ice_servers.length) await applyIceServers(ice_servers);
     let stream = name || ('p' + (job.printer_id || 'x'));
     if (vendor === 'bambu') {
