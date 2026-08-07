@@ -517,7 +517,15 @@ async function connectWs() {
 
     // If the upgrade doesn't complete promptly, treat it as unsupported and let
     // the caller fall back rather than stalling the connector.
-    const opening = setTimeout(() => { if (!settled) { settled = true; try { ws.close(); } catch { /* */ } reject(new Error('websocket upgrade timed out')); } }, 10000);
+    const opening = setTimeout(() => {
+      if (!settled) {
+        settled = true;
+        try { ws.close(); } catch { /* */ }
+        // A timeout may mean an intermediary is swallowing the upgrade, which IS
+        // a capability problem, so this one is not marked transient.
+        reject(new Error('websocket upgrade timed out'));
+      }
+    }, 10000);
 
     ws.onopen = () => {
       clearTimeout(opening);
@@ -546,6 +554,9 @@ async function connectWs() {
       clearTimeout(opening);
       if (activeWs === ws) activeWs = null;
       sidxById.clear();
+      // 1006/1012/1013 and a close before the session was usable mean the far
+      // side went away, not that it refuses upgrades.
+      const transientClose = !settled && [1006, 1011, 1012, 1013].includes(ev?.code);
       // 4401 is our own "auth rejected" close code. Tag it so main() backs off
       // slowly and prints something the user can act on, instead of hammering.
       if (ev && ev.code === 4401) {
@@ -558,13 +569,19 @@ async function connectWs() {
         if (!settled) { settled = true; return reject(err); }
         return;
       }
-      if (!settled) { settled = true; return reject(new Error('websocket closed before it was usable')); }
+      if (!settled) {
+        settled = true;
+        const err = new Error('websocket closed before it was usable');
+        err.transient = transientClose || true; // a close during handshake is never proof of non-support
+        return reject(err);
+      }
       resolve('closed');
     };
 
     ws.onerror = () => {
       clearTimeout(opening);
-      if (!settled) { settled = true; reject(new Error('websocket connection failed')); }
+      // A failed connection is a reachability problem, not a capability one.
+      if (!settled) { settled = true; const err = new Error('websocket connection failed'); err.transient = true; reject(err); }
     };
 
     // Resolve only when the session ends; main()'s loop treats a return as
@@ -666,11 +683,22 @@ async function main() {
         } catch (e) {
           if (e?.authRejected) throw e;          // not a transport problem
           if (wsProven) throw e;                 // it worked before; treat as a normal drop
-          log('multiplexed tunnel unavailable (' + (e?.message || 'unknown') + ') — using the compatibility stream'
-            + `, re-checking in ${Math.round(WS_REPROBE_MS / 60000)}m`);
-          useWs = false;
-          wsRetryAt = Date.now() + WS_REPROBE_MS;
-          await connectOnce();
+          // A server that is restarting is not a server that lacks websockets.
+          // Treating a transient 502/503/504 or a refused connection as "not
+          // supported" pinned the connector to the slow transport for ten
+          // minutes after every deploy, and printers flapped the whole time
+          // because relayed MQTT cannot survive that path. Retry the upgrade on
+          // the next reconnect instead; only a definite rejection downgrades.
+          if (e?.transient) {
+            log('multiplexed tunnel not reachable right now (' + (e?.message || 'unknown') + ') - using the compatibility stream, retrying the tunnel on next reconnect');
+            await connectOnce();
+          } else {
+            log('multiplexed tunnel unavailable (' + (e?.message || 'unknown') + ') - using the compatibility stream'
+              + `, re-checking in ${Math.round(WS_REPROBE_MS / 60000)}m`);
+            useWs = false;
+            wsRetryAt = Date.now() + WS_REPROBE_MS;
+            await connectOnce();
+          }
         }
       } else {
         await connectOnce();
