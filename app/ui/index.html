@@ -169,6 +169,11 @@
           <summary>Advanced (allow-list, ports, signing key, test printer)</summary>
           <label for="allow">Allowed LAN hosts <span class="muted">(comma-separated; "private" = all RFC1918)</span></label>
           <input id="allow" placeholder="private" />
+          <label for="log_url">Log server (optional)</label>
+          <input id="log_url" placeholder="http://loki.example.lan:3100 or syslog://siem.example.lan:514" />
+          <p class="hint">Leave blank to keep all logs on this machine. When set, the connector sends its
+             own diagnostic logs to your server. Nothing is sent anywhere by default.</p>
+
           <label for="allow_ports">Allowed ports</label>
           <input id="allow_ports" placeholder="80,443,7125,8080,8081,8888,3000,1883,8883,990,21" />
           <label for="test_printer">Test printer for self-test <span class="muted">(host or host:port)</span></label>
@@ -215,7 +220,7 @@
       const REPO = "https://github.com/norjms/openprinthq-cloud-client";
       const LATEST = REPO + "/releases";
 
-      const FIELDS = ["control_url", "token", "name", "allow", "allow_ports", "test_printer", "signing_pubkey"];
+      const FIELDS = ["control_url", "token", "name", "allow", "allow_ports", "test_printer", "signing_pubkey", "log_url"];
 
       // Last known status; optimistic updates merge into this.
       let lastStatus = { running: false, connected: false, managed_by_service: false, message: "starting…" };

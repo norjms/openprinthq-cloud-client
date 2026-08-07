@@ -27,8 +27,16 @@ import { writeFileSync, mkdirSync, existsSync, unlinkSync } from 'node:fs';
 // temp dir, which is always writable even for a packaged install.
 function shortPathIfNeeded(p) {
   if (!p || process.platform !== 'win32' || !p.includes(' ')) return p;
+  // Ask Windows for the 8.3 name via the scripting host rather than `for %I`:
+  // execFileSync re-quotes the argument, so the cmd one-liner echoed back a
+  // mangled string that still contained spaces and was silently discarded.
   try {
-    const out = execFileSync('cmd.exe', ['/c', 'for %I in ("' + p + '") do @echo %~sI'], { encoding: 'utf8' });
+    const vbs = 'WScript.Echo(CreateObject("Scripting.FileSystemObject").GetFile(WScript.Arguments(0)).ShortPath)';
+    const f = path.join(os.tmpdir(), `ophq-shortpath-${process.pid}.vbs`);
+    writeFileSync(f, vbs, 'utf8');
+    let out = '';
+    try { out = execFileSync('cscript.exe', ['//Nologo', f, p], { encoding: 'utf8' }); }
+    finally { try { unlinkSync(f); } catch { /* best effort */ } }
     const short = out.trim().split(/\r?\n/).pop().trim();
     return short && !short.includes(' ') ? short : p;
   } catch { return p; }
