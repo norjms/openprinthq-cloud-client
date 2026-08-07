@@ -14,6 +14,10 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
 VERSION=""; SKIP_FETCH=0
+# cargo tauri rewrites Cargo.lock during the build, so switching tags in a reused
+# checkout fails with "local changes would be overwritten". Building two tags in
+# a row silently produced the first one twice on Windows and aborted on Linux.
+git -C "$ROOT" checkout -- app/src-tauri/Cargo.lock 2>/dev/null || true
 while [ $# -gt 0 ]; do
   case "$1" in
     --version) VERSION="$2"; shift 2 ;;
