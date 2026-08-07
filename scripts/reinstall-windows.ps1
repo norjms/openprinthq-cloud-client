@@ -7,7 +7,7 @@
   both slow and risky: the connector's private key lives in ProgramData, and if
   an uninstall removes it the connector comes back with a NEW key. The
   control-plane has already locked onto the old one (trust on first use), so it
-  is rejected on every connect and the printer silently stops responding — the
+  is rejected on every connect and the printer silently stops responding -- the
   failure looks like a broken client rather than a lost key.
 
   So state is copied out before removal and restored afterwards, always.
@@ -30,7 +30,7 @@ $ProgressPreference    = 'SilentlyContinue'
 
 if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
       ).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-  throw "Run this from an elevated PowerShell — msiexec needs administrator."
+  throw "Run this from an elevated PowerShell -- msiexec needs administrator."
 }
 
 $State  = "$env:PROGRAMDATA\openprinthq"
@@ -83,7 +83,7 @@ if (-not $installed) { Write-Host "==> nothing installed to remove" }
 Write-Host "==> installing"
 $log = Join-Path $env:TEMP 'ophq-install.log'
 $p = Start-Process msiexec.exe -ArgumentList "/i `"$Msi`" /qn /norestart /l*v `"$log`"" -Wait -PassThru
-if ($p.ExitCode -notin 0,3010) { throw "install failed ($($p.ExitCode)) — see $log" }
+if ($p.ExitCode -notin 0,3010) { throw "install failed ($($p.ExitCode)) -- see $log" }
 
 # ---- restore pairing -------------------------------------------------------
 if (-not $Fresh -and (Test-Path $Backup)) {
@@ -94,8 +94,8 @@ if (-not $Fresh -and (Test-Path $Backup)) {
 
 $now = Get-ItemProperty $keys -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -like '*OpenPrintHQ*' }
 Write-Host "installed: $($now.DisplayName) v$($now.DisplayVersion)" -ForegroundColor Green
-if (Test-Path "$State\connector-key.pem") { Write-Host "pairing key present — the connector should reconnect without re-pairing" -ForegroundColor Green }
-else { Write-Host "no pairing key — this connector will pair fresh on first connect" -ForegroundColor Yellow }
+if (Test-Path "$State\connector-key.pem") { Write-Host "pairing key present -- the connector should reconnect without re-pairing" -ForegroundColor Green }
+else { Write-Host "no pairing key -- this connector will pair fresh on first connect" -ForegroundColor Yellow }
 
 if (-not $KeepRunning) {
   $exe = Get-ChildItem "$env:PROGRAMFILES\OpenPrintHQ Cloud Client" -Filter *.exe -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
