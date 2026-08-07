@@ -105,10 +105,31 @@ if (-not $KeepRunning) {
   $exe = Join-Path "$env:PROGRAMFILES\OpenPrintHQ Cloud Client" 'openprinthq-cloud-client.exe'
   if (Test-Path $exe) {
     Write-Host "==> starting the client"
-    Start-Process $exe
-    Start-Sleep -Seconds 3
-    if (Get-Process -Name 'openprinthq-cloud-client' -ErrorAction SilentlyContinue) {
-      Write-Host "client is running" -ForegroundColor Green
+    # Start-Process launches in the CALLING session. Run this over SSH or any
+    # non-interactive context and the app lands in session 0, which has no
+    # desktop: the process runs and connects normally but there is no system
+    # tray for its icon, so it looks like the app failed to start. A scheduled
+    # task targeted at the logged-on user puts it in the interactive session.
+    $console = (Get-Process -Id $PID).SessionId
+    if ($console -eq 0) {
+      $task = 'OPHQClientLaunch'
+      $act  = New-ScheduledTaskAction -Execute $exe
+      $trg  = New-ScheduledTaskTrigger -AtLogOn -User "$env:USERDOMAIN\$env:USERNAME"
+      $set  = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit 0
+      Register-ScheduledTask -TaskName $task -Action $act -Trigger $trg -Settings $set -RunLevel Limited -Force | Out-Null
+      Start-ScheduledTask -TaskName $task
+    } else {
+      Start-Process $exe
+    }
+    Start-Sleep -Seconds 5
+    $p = Get-Process -Name 'openprinthq-cloud-client' -ErrorAction SilentlyContinue
+    if ($p) {
+      $sess = ($p | Select-Object -First 1).SessionId
+      if ($sess -eq 0) {
+        Write-Host "client is running but in session 0 -- it will work, but no tray icon will appear. Start it from the Start menu for the UI." -ForegroundColor Yellow
+      } else {
+        Write-Host "client is running in session $sess -- tray icon should be visible" -ForegroundColor Green
+      }
     } else {
       Write-Host "client did not stay running -- start it from the Start menu and check its log" -ForegroundColor Yellow
     }
