@@ -1,3 +1,8 @@
-# Node sidecar binaries are fetched per-build by scripts/fetch-node.*
+# Sidecar binaries are fetched per-build, never committed:
+#   scripts/fetch-node.sh|.ps1          -> ophq-node-*
+#   scripts/fetch-camera-tools.sh|.ps1  -> go2rtc-*, ffmpeg-*
+# ffmpeg alone is ~80MB, so an accidental commit is expensive and permanent.
 ophq-node-*
+go2rtc-*
+ffmpeg-*
 !.gitignore
