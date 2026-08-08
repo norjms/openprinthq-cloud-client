@@ -266,10 +266,30 @@ fn agent_env(cfg: &Config, key_path: &PathBuf) -> HashMap<String, String> {
         "OPHQ_CLIENT_KEY_FILE".into(),
         key_path.to_string_lossy().to_string(),
     );
+    // Where the agent pins the control-plane's command-signing key. It sits
+    // beside the client key so it survives upgrades and restarts: a path that
+    // does not persist re-pins on every boot, which protects nothing.
+    //
+    // The agent refuses to start without either this or an explicit
+    // OPHQ_ALLOW_UNSIGNED=1, so omitting it here would break the desktop
+    // connector outright rather than quietly weaken it.
+    env.insert(
+        "OPHQ_SIGNING_PUBKEY_FILE".into(),
+        signing_key_path(key_path).to_string_lossy().to_string(),
+    );
     if cfg.debug {
         env.insert("OPHQ_DEBUG".into(), "1".into());
     }
     env
+}
+
+/// The pinned control-plane signing key lives beside the connector's own key,
+/// so both share the same persistence guarantees.
+fn signing_key_path(key_path: &std::path::Path) -> std::path::PathBuf {
+    key_path
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."))
+        .join("ophq-signing.pub.pem")
 }
 
 fn agent_script(app: &AppHandle) -> Result<PathBuf, String> {
@@ -617,6 +637,10 @@ async fn validate_connection(
         "OPHQ_CLIENT_KEY_FILE".to_string(),
         state.key_path.to_string_lossy().to_string(),
     );
+    env.insert(
+        "OPHQ_SIGNING_PUBKEY_FILE".to_string(),
+        signing_key_path(&state.key_path).to_string_lossy().to_string(),
+    );
     env.insert("OPHQ_CONTROL_URL".to_string(), base.clone());
     env.insert("OPHQ_CONNECTOR_TOKEN".to_string(), token.trim().to_string());
     let out = app
@@ -657,6 +681,10 @@ async fn connector_pubkey(
     env.insert(
         "OPHQ_CLIENT_KEY_FILE".to_string(),
         state.key_path.to_string_lossy().to_string(),
+    );
+    env.insert(
+        "OPHQ_SIGNING_PUBKEY_FILE".to_string(),
+        signing_key_path(&state.key_path).to_string_lossy().to_string(),
     );
     let out = app
         .shell()
