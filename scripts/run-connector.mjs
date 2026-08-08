@@ -75,6 +75,13 @@ for (const [k, envName] of Object.entries(map)) {
 if (!process.env.OPHQ_CLIENT_KEY_FILE) {
   process.env.OPHQ_CLIENT_KEY_FILE = path.join(path.dirname(cfgPath), 'connector-key.pem');
 }
+// Where the agent pins the control-plane's command-signing key. Same directory,
+// same persistence guarantees. Without it the agent refuses to start, because
+// running without a pinned key means executing unauthenticated commands against
+// the user's LAN.
+if (!process.env.OPHQ_SIGNING_PUBKEY_FILE) {
+  process.env.OPHQ_SIGNING_PUBKEY_FILE = path.join(path.dirname(cfgPath), 'ophq-signing.pub.pem');
+}
 
 // Resolve the agent: $OPHQ_AGENT_FILE, else a sibling ../agent/src/agent.js.
 const agentFile =
