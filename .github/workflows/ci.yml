@@ -45,9 +45,15 @@ jobs:
             librsvg2-dev build-essential curl wget file libssl-dev libxdo-dev \
             pkg-config libsoup-3.0-dev
 
-      # The build script expects the sidecar to exist even for a check build.
+      # Tauri's build script validates every externalBin path before it will
+      # compile anything, so a check build needs all three sidecars present even
+      # though it never runs them. Miss one and cargo check fails on a resource
+      # path rather than on any Rust, which reads like a broken toolchain.
       - name: Fetch bundled Node sidecar
         run: bash scripts/fetch-node.sh x86_64-unknown-linux-gnu app/src-tauri/binaries
+
+      - name: Fetch camera sidecars (go2rtc + ffmpeg)
+        run: bash scripts/fetch-camera-tools.sh x86_64-unknown-linux-gnu app/src-tauri/binaries
 
       - name: cargo check
         working-directory: app/src-tauri
