@@ -18,5 +18,8 @@ services:
       # pairing survives container recreates (without this the key regenerates
       # and your instance rejects it until you Reset the connector).
       OPHQ_CLIENT_KEY_FILE: /data/connector-key.pem
+      # Where the control-plane's command-signing key is pinned on first run.
+      # On the same volume so the pin survives container recreates.
+      OPHQ_SIGNING_PUBKEY_FILE: /data/ophq-signing.pub.pem
     volumes:
       - ./data:/data
