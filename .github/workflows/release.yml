@@ -10,8 +10,10 @@
 name: release
 
 on:
-  push:
-    tags: ["v*"]
+  # Automatic release on tag push is off: installers are built locally, and an
+  # Actions run triggered by the same tag competes to publish the same release,
+  # so whichever finishes second fails or overwrites assets. Dispatch it with a
+  # version when you want Actions to do the build instead.
   workflow_dispatch:
     inputs:
       version:
