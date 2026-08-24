@@ -25,6 +25,7 @@
 import net from 'node:net';
 import dgram from 'node:dgram';
 import os from 'node:os';
+import path from 'node:path';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import { configureLogShipping, shipLog } from './logship.js';
@@ -759,9 +760,146 @@ async function connectOnce() {
   } finally { clearTimeout(idle); }
 }
 
+// ---------------------------------------------------------------------------
+// Single-instance guard
+// ---------------------------------------------------------------------------
+// The control-plane keys a connector's live session by connector id and lets a
+// NEW session evict the old one — in both transports, unconditionally. Two
+// agents holding the same token therefore do not co-exist badly, they fight:
+// each reconnects on drop, evicts the other, and every eviction tears down the
+// tunnels the loser owned. On 2026-08-08 and again on 2026-08-24 two autostart
+// entries on one machine (an HKCU Run key and a scheduled task) did exactly
+// this, and the visible symptom was not "two clients" but Bambu printers
+// flapping offline and plate-clear commands never landing, ~45 MQTT drops a
+// minute, for hours. Nothing on either side said "you are running two of me".
+//
+// The guard lives here rather than in the desktop app because this is the layer
+// every launch path goes through: the tray app, the platform service, a docker
+// container, or someone running `node src/agent.js` by hand.
+//
+// It is keyed on control URL + token, so one machine can legitimately run
+// several connectors against different instances (or different connectors on
+// one instance) — what it forbids is two agents claiming the SAME identity.
+//
+// A losing instance waits rather than exiting. Exiting turns the supervisor's
+// restart loop into a message storm, and waiting is genuinely what you want:
+// when the holder stops, the waiter takes over on its own.
+
+const LOCK_STALE_MS = 5 * 60 * 1000;   // holder refreshes every 30s; 10x margin
+const LOCK_POLL_MS = 30 * 1000;
+const LOCK_RENAG_MS = 5 * 60 * 1000;
+
+function lockPath() {
+  // Hash the identity: the token must not appear in a filename, and the path
+  // has to be stable across restarts and identical for every launch path.
+  const id = crypto.createHash('sha256')
+    .update(`${CONFIG.controlUrl}|${CONFIG.token}`)
+    .digest('hex').slice(0, 16);
+  return path.join(os.tmpdir(), `ophq-connector-${id}.lock`);
+}
+
+function processAlive(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try { process.kill(pid, 0); return true; }
+  // EPERM means it exists and belongs to another user — alive for our purposes.
+  catch (e) { return e?.code === 'EPERM'; }
+}
+
+function readLock(p) {
+  try { return JSON.parse(fs.readFileSync(p, 'utf8')); } catch { return null; }
+}
+
+// Returns { ok: true } on acquisition, or { ok: false, holder } when someone
+// else holds it.
+function tryAcquireLock(p) {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const fd = fs.openSync(p, 'wx');
+      fs.writeFileSync(fd, JSON.stringify({
+        pid: process.pid,
+        name: CONFIG.name,
+        host: os.hostname(),
+        controlUrl: CONFIG.controlUrl,
+        startedAt: new Date().toISOString()
+      }));
+      fs.closeSync(fd);
+      return { ok: true };
+    } catch (e) {
+      if (e?.code !== 'EEXIST') {
+        // A lock we cannot create must not block the connector from running —
+        // a read-only or missing temp dir is not a reason to refuse to work.
+        log(`WARNING: could not create the single-instance lock at ${p} (${e?.message}) — continuing without it`);
+        return { ok: true, unguarded: true };
+      }
+      const holder = readLock(p);
+      let mtimeMs = 0;
+      try { mtimeMs = fs.statSync(p).mtimeMs; } catch { /* raced with a release */ }
+      const fresh = Date.now() - mtimeMs < LOCK_STALE_MS;
+      // Alive AND refreshing = a real holder. Alive but stale covers PID reuse,
+      // where an unrelated process inherited the recorded pid.
+      if (holder && processAlive(holder.pid) && fresh) return { ok: false, holder };
+      // Stale: the holder crashed, was killed, or the pid was recycled.
+      log(`clearing a stale connector lock at ${p}` + (holder ? ` (pid ${holder.pid}, last refreshed ${mtimeMs ? new Date(mtimeMs).toISOString() : 'never'})` : ''));
+      try { fs.unlinkSync(p); } catch { /* someone else cleared it first */ }
+    }
+  }
+  return { ok: true, unguarded: true };
+}
+
+function holdLock(p) {
+  // Refresh the mtime so a live holder is distinguishable from a recycled pid.
+  const beat = setInterval(() => {
+    try { const t = new Date(); fs.utimesSync(p, t, t); } catch { /* released */ }
+  }, 30 * 1000);
+  beat.unref();
+  const release = () => {
+    try {
+      const held = readLock(p);
+      if (held && held.pid === process.pid) fs.unlinkSync(p);
+    } catch { /* nothing to release */ }
+  };
+  process.on('exit', release);
+  return release;
+}
+
+// Blocks until this process owns the connector identity. Never gives up: the
+// holder may well go away, and taking over then is the useful behaviour.
+async function acquireSingleInstance() {
+  if (/^(1|true|yes|on)$/i.test(process.env.OPHQ_SKIP_SINGLE_INSTANCE || '')) {
+    log('WARNING: OPHQ_SKIP_SINGLE_INSTANCE is set — running without the single-instance guard. Two agents on one token will evict each other continuously.');
+    return;
+  }
+  const p = lockPath();
+  let nagged = 0;
+  for (;;) {
+    const got = tryAcquireLock(p);
+    if (got.ok) {
+      if (!got.unguarded) holdLock(p);
+      return;
+    }
+    const h = got.holder;
+    if (Date.now() - nagged > LOCK_RENAG_MS) {
+      nagged = Date.now();
+      log(
+        `ANOTHER CONNECTOR IS ALREADY RUNNING for ${CONFIG.controlUrl} on this machine ` +
+        `(pid ${h.pid}, name "${h.name}", started ${h.startedAt}). Waiting instead of ` +
+        'competing: two agents sharing one token evict each other continuously, which ' +
+        'looks like printers flapping offline rather than like a duplicate client. ' +
+        'If this is an extra autostart entry, remove it; this process will take over ' +
+        'automatically if the other one stops.'
+      );
+    }
+    await new Promise((r) => setTimeout(r, LOCK_POLL_MS));
+  }
+}
+
 async function main() {
   if (!CONFIG.controlUrl) fail('OPHQ_CONTROL_URL is required (e.g. https://openprinthq.example.org)');
   if (!CONFIG.token) fail('OPHQ_CONNECTOR_TOKEN is required (create one in Settings → Connectors)');
+
+  // Before anything touches the network: make sure we are the only agent on
+  // this machine claiming this connector identity.
+  await acquireSingleInstance();
 
   await pinSigningKey();
 
