@@ -85,25 +85,83 @@ jobs:
         working-directory: app
         run: cargo tauri build --bundles msi
 
-      - name: Sign MSI
-        shell: pwsh
+      # Signing.
+      #
+      # The provider is selected by which secrets exist, so changing provider is
+      # a settings change rather than a code change, and a repository with
+      # neither configured still produces a release.
+      #
+      # There is deliberately NO self-signed fallback here any more. A
+      # self-signed Authenticode signature does not chain to a trusted root, so
+      # Windows treats the binary exactly as it treats an unsigned one, while
+      # WDAC and AppLocker publisher rules cannot match it and some scanners
+      # score an invalid signature above a missing one. Its only real effect was
+      # a reassuring line in this log. docs/CODE-SIGNING.md states the current
+      # position in the open instead.
+
+      - name: Sign MSI (Azure Artifact Signing)
+        if: ${{ secrets.AZURE_CLIENT_SECRET != '' }}
+        uses: azure/artifact-signing-action@v2
         env:
-          CERT_B64: ${{ secrets.WINDOWS_CERT_PFX_BASE64 }}
-          CERT_PASS: ${{ secrets.WINDOWS_CERT_PASSWORD }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+        with:
+          endpoint: ${{ vars.AZURE_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ vars.AZURE_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ vars.AZURE_SIGNING_PROFILE }}
+          files-folder: app/src-tauri/target/release/bundle/msi
+          files-folder-filter: msi
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+
+      # SignPath signs a file that GitHub is already holding, so the unsigned
+      # MSI has to be uploaded as a workflow artifact first and the signed one
+      # comes back into the same folder.
+      - name: Stage unsigned MSI for SignPath
+        if: ${{ secrets.SIGNPATH_API_TOKEN != '' && secrets.AZURE_CLIENT_SECRET == '' }}
+        id: unsigned-msi
+        uses: actions/upload-artifact@v4
+        with:
+          name: unsigned-windows
+          path: app/src-tauri/target/release/bundle/msi/*.msi
+          if-no-files-found: error
+
+      - name: Sign MSI (SignPath Foundation)
+        if: ${{ secrets.SIGNPATH_API_TOKEN != '' && secrets.AZURE_CLIENT_SECRET == '' }}
+        uses: signpath/github-action-submit-signing-request@v1
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ vars.SIGNPATH_POLICY_SLUG }}
+          artifact-configuration-slug: ${{ vars.SIGNPATH_ARTIFACT_SLUG }}
+          github-artifact-id: ${{ steps.unsigned-msi.outputs.artifact-id }}
+          wait-for-completion: true
+          output-artifact-directory: app/src-tauri/target/release/bundle/msi
+
+      # Say plainly what the user is about to be handed. An unsigned installer
+      # is an acceptable state; an unsigned installer nobody noticed is not.
+      - name: Report signing state
+        shell: pwsh
         run: |
-          if (-not $env:CERT_B64) {
-            Write-Host "::warning::No WINDOWS_CERT_PFX_BASE64 secret set - shipping an UNSIGNED MSI."
-            exit 0
-          }
-          $pfx = Join-Path $env:RUNNER_TEMP "ophq-codesign.pfx"
-          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:CERT_B64))
-          $signtool = Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin\*\x64\signtool.exe" -ErrorAction SilentlyContinue | Select-Object -Last 1
-          if (-not $signtool) { throw "signtool.exe not found" }
           $msi = Get-ChildItem app/src-tauri/target/release/bundle/msi/*.msi | Select-Object -First 1
-          & $signtool.FullName sign /f $pfx /p $env:CERT_PASS /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 $msi.FullName
-          if ($LASTEXITCODE -ne 0) { throw "signtool failed" }
-          Remove-Item $pfx -Force
-          Write-Host "Signed $($msi.Name)"
+          if (-not $msi) { throw "no MSI produced" }
+          $sig = Get-AuthenticodeSignature $msi.FullName
+          Write-Host "MSI:    $($msi.Name)"
+          Write-Host "Status: $($sig.Status)"
+          if ($sig.Status -eq 'Valid') {
+            Write-Host "Signer: $($sig.SignerCertificate.Subject)"
+            Write-Host "Thumb:  $($sig.SignerCertificate.Thumbprint)"
+          } elseif ($sig.Status -eq 'NotSigned') {
+            Write-Host "::warning::Shipping an UNSIGNED MSI. No signing provider is configured. See docs/CODE-SIGNING.md."
+          } else {
+            # Anything that is neither valid nor absent means a signature was
+            # applied and does not verify, which is the state this workflow
+            # exists to never be in again.
+            throw "MSI carries a signature that does not verify ($($sig.Status)). Refusing to publish it."
+          }
 
       - uses: actions/upload-artifact@v4
         with:
@@ -279,6 +337,20 @@ jobs:
       - name: List assets
         run: ls -la assets
 
+      # Until certificate signing is in place, a published checksum is the only
+      # thing a user can check a download against, so it has to be an asset of
+      # the release rather than a number in a log.
+      - name: Checksums
+        working-directory: assets
+        run: |
+          set -euo pipefail
+          # Name the inputs explicitly. Globbing into a redirect that creates a
+          # file in the same directory is a coin flip nobody should have to
+          # reason about while reading a release log.
+          find . -maxdepth 1 -type f -printf '%P\n' | sort > /tmp/manifest
+          sha256sum $(cat /tmp/manifest) > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
       - name: Publish
         uses: softprops/action-gh-release@v2
         with:
@@ -301,3 +373,16 @@ jobs:
                 docker pull ghcr.io/${{ github.repository_owner }}/openprinthq-connector:${{ needs.version.outputs.version }}
 
             A loadable image tarball is also attached.
+
+            **Verifying your download**
+
+            `SHA256SUMS.txt` is attached. Compare it against your download
+            before installing:
+
+                # Windows
+                Get-FileHash .\OpenPrintHQ.Cloud.Client_${{ needs.version.outputs.version }}_x64_en-US.msi -Algorithm SHA256
+
+                # macOS / Linux
+                shasum -a 256 <file>
+
+            See `docs/CODE-SIGNING.md` for what is and is not signed, and why.
