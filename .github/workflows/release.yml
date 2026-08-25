@@ -51,6 +51,14 @@ jobs:
     name: Windows (.msi)
     needs: version
     runs-on: windows-latest
+    # Which signing provider is configured, resolved once. This has to live at
+    # job level: GitHub does not expose the `secrets` context to a step-level
+    # `if:`, only to a job-level `env:`. A step `if:` that reads `secrets` is not
+    # a step that gets skipped, it is a workflow that will not parse at all, and
+    # it fails with no jobs and no error you can read from the run page.
+    env:
+      HAS_AZURE_SIGNING: ${{ secrets.AZURE_CLIENT_SECRET != '' }}
+      HAS_SIGNPATH: ${{ secrets.SIGNPATH_API_TOKEN != '' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -100,7 +108,7 @@ jobs:
       # position in the open instead.
 
       - name: Sign MSI (Azure Artifact Signing)
-        if: ${{ secrets.AZURE_CLIENT_SECRET != '' }}
+        if: env.HAS_AZURE_SIGNING == 'true'
         uses: azure/artifact-signing-action@v2
         env:
           AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
@@ -120,7 +128,7 @@ jobs:
       # MSI has to be uploaded as a workflow artifact first and the signed one
       # comes back into the same folder.
       - name: Stage unsigned MSI for SignPath
-        if: ${{ secrets.SIGNPATH_API_TOKEN != '' && secrets.AZURE_CLIENT_SECRET == '' }}
+        if: env.HAS_SIGNPATH == 'true' && env.HAS_AZURE_SIGNING != 'true'
         id: unsigned-msi
         uses: actions/upload-artifact@v4
         with:
@@ -129,7 +137,7 @@ jobs:
           if-no-files-found: error
 
       - name: Sign MSI (SignPath Foundation)
-        if: ${{ secrets.SIGNPATH_API_TOKEN != '' && secrets.AZURE_CLIENT_SECRET == '' }}
+        if: env.HAS_SIGNPATH == 'true' && env.HAS_AZURE_SIGNING != 'true'
         uses: signpath/github-action-submit-signing-request@v1
         with:
           api-token: ${{ secrets.SIGNPATH_API_TOKEN }}

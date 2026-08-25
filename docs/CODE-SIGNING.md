@@ -39,15 +39,28 @@ install and completely unprotected against a tampered update feed.
 | Linux `.deb` / `.rpm` | not signed | not applicable, see below |
 | Connector container image | not applicable | GHCR digest |
 
-Nothing here is signed yet. That is a deliberate statement of fact rather than
-an omission: an earlier version of the release workflow signed the MSI with a
-self-signed certificate, which is worse than shipping it unsigned. A self-signed
-Authenticode signature does not chain to a trusted root, so Windows treats the
-binary exactly as it treats an unsigned one, while WDAC and AppLocker publisher
-rules cannot match it and some scanners score an invalid signature above a
-missing one. It also produced a comforting line in the build log that read as
-though signing were handled. It is not, and this table says so plainly until it
-is.
+Nothing here is signed. That is a deliberate statement of fact rather than an
+omission, and it is a correction.
+
+Releases up to and including **v0.0.19** carried an Authenticode signature on
+the Windows MSI. Inspecting one shows why it was not worth having:
+
+```
+subject = CN = OpenPrintHQ
+issuer  = CN = OpenPrintHQ
+```
+
+Subject and issuer are the same, which is to say the certificate vouches for
+itself. It chains to no root any machine trusts, so Windows treats the installer
+exactly as it treats an unsigned one, WDAC and AppLocker publisher rules cannot
+match it, and some scanners score a signature that fails validation above one
+that is absent. What it did produce reliably was a line in the build log, and a
+line in `installer/README.md`, saying the installer was signed.
+
+From the next release the MSI ships unsigned until a real certificate exists.
+That is not a regression. It is the same amount of protection, stated
+accurately, and the release job now refuses to publish an MSI carrying a
+signature that does not verify, so this cannot quietly come back.
 
 ## How to verify a download today
 
