@@ -227,10 +227,36 @@ fn resolve_config_dir(app: &AppHandle) -> PathBuf {
     m
 }
 
+/// Read config.json, tolerating a UTF-8 BOM and saying so when it is unusable.
+///
+/// This silently returned defaults on any parse error, which is a much worse
+/// failure than it sounds: an unparseable config means no control URL and no
+/// token, so the supervisor starts an agent that cannot connect, or none at
+/// all, and the app shows no reason. It happened for real on 2026-08-25, from
+/// nothing more exotic than a config file rewritten by a tool that adds a BOM —
+/// PowerShell's Set-Content -Encoding UTF8 does exactly that. The connector was
+/// simply down, with an app running and nothing to explain it.
+///
+/// So: strip a BOM rather than choke on it (serde_json will not skip one), and
+/// when the file exists but cannot be parsed, leave a line in the log rather
+/// than pretending it was empty.
 fn load_config(path: &PathBuf) -> Config {
-    match std::fs::read_to_string(path) {
-        Ok(txt) => serde_json::from_str(&txt).unwrap_or_default(),
-        Err(_) => Config::default(),
+    let txt = match std::fs::read_to_string(path) {
+        Ok(t) => t,
+        Err(_) => return Config::default(), // no file yet: a first run, not an error
+    };
+    let cleaned = txt.strip_prefix('\u{feff}').unwrap_or(&txt);
+    match serde_json::from_str(cleaned) {
+        Ok(cfg) => cfg,
+        Err(e) => {
+            eprintln!(
+                "FATAL: {} is not valid JSON ({e}). Falling back to an empty configuration, \
+                 which means the connector has no instance URL or token and cannot start. \
+                 Fix or delete the file and reconfigure.",
+                path.display()
+            );
+            Config::default()
+        }
     }
 }
 
