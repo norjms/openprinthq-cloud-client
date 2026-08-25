@@ -769,6 +769,25 @@ fn split_hostport(hp: &str, default_port: u16) -> (String, u16) {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        // Registered FIRST, deliberately: the whole point is to decide whether
+        // this process should exist before it builds any state. A second launch
+        // hands its argv to the instance already running and exits.
+        //
+        // This is the tidy half of the duplicate-client story. The load-bearing
+        // half is in the agent, which refuses to be the second holder of a
+        // connector token no matter how it was started (this app, the platform
+        // service, docker, or by hand). Without that, stopping a second APP
+        // would still leave every other launch path able to start a competing
+        // agent. With it, this plugin's job is narrower: make a second launch
+        // behave like the user expects — bring the window they already have to
+        // the front, rather than silently doing nothing.
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            if let Some(w) = app.get_webview_window("main") {
+                let _ = w.show();
+                let _ = w.unminimize();
+                let _ = w.set_focus();
+            }
+        }))
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_autostart::init(
