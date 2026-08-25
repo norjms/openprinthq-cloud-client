@@ -5,7 +5,7 @@ these are the per-platform installer bits layered on top.
 
 | Platform | Format | How it's built | Boot without login |
 |----------|--------|----------------|--------------------|
-| Windows  | `.msi` | `cargo tauri build --bundles msi` (WiX). CI signs it self-signed. | `service/windows/install-service.ps1` (wired via `installer/windows/service.wxs`) |
+| Windows  | `.msi` | `cargo tauri build --bundles msi` (WiX). Unsigned, see `docs/CODE-SIGNING.md`. | `service/windows/install-service.ps1` (wired via `installer/windows/service.wxs`) |
 | macOS    | `.pkg` | `scripts/build-macos.sh` → `installer/macos/build-pkg.sh` (pkgbuild/productbuild) | LaunchDaemon (`service/launchd/…`), installed by the `.pkg` |
 | Linux    | `.deb` / `.rpm` | `cargo tauri build --bundles deb,rpm` | `service/systemd/openprinthq-connector.service` |
 | Any      | Docker | `docker build agent/` | `restart: unless-stopped` in compose |
@@ -28,7 +28,8 @@ service fragment or by running `install-service.ps1` elevated.
 - `distribution.xml` — productbuild distribution (macOS 11+).
 - `scripts/preinstall`, `scripts/postinstall` — daemon lifecycle + self-test.
 
-Unsigned for 0.0.1 (an Apple Developer ID is tracked in the backlog).
+Unsigned and not notarized. An Apple Developer ID is required and is tracked in
+`docs/CODE-SIGNING.md`.
 
 ## Linux (`linux/`)
 
