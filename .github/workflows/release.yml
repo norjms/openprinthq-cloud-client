@@ -352,11 +352,15 @@ jobs:
         working-directory: assets
         run: |
           set -euo pipefail
-          # Name the inputs explicitly. Globbing into a redirect that creates a
-          # file in the same directory is a coin flip nobody should have to
-          # reason about while reading a release log.
-          find . -maxdepth 1 -type f -printf '%P\n' | sort > /tmp/manifest
-          sha256sum $(cat /tmp/manifest) > SHA256SUMS.txt
+          # Every asset name here contains spaces ("OpenPrintHQ Cloud
+          # Client_0.0.20_x64_en-US.msi"), so the filenames have to reach
+          # sha256sum without passing through word splitting. Hence -print0 and
+          # xargs -0 rather than a glob or a list substituted into a command
+          # line. SHA256SUMS.txt is excluded by name so a re-run cannot checksum
+          # the previous run's output.
+          find . -maxdepth 1 -type f ! -name SHA256SUMS.txt -print0 \
+            | sort -z \
+            | xargs -0 sha256sum > SHA256SUMS.txt
           cat SHA256SUMS.txt
 
       - name: Publish
