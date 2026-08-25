@@ -70,6 +70,8 @@ const CONFIG = {
 };
 
 // Logs go to stderr so stdout stays clean (e.g. for `--pubkey`).
+const START_TIME = Date.now();
+
 function log(...a) {
   const line = [new Date().toISOString(), '[connector]', ...a].join(' ');
   console.error(line);
@@ -182,7 +184,7 @@ function fingerprintOf(pem) {
 
 async function fetchServerPubKey() {
   const res = await fetch(`${CONFIG.controlUrl}/api/connector/signing-pubkey`, {
-    headers: { authorization: `Bearer ${CONFIG.token}`, ...clientAuthHeaders() }
+    headers: { authorization: `Bearer ${CONFIG.token}`, ...clientAuthHeaders(), ...identityHeaders() }
   });
   if (res.status === 404) throw new Error('control-plane does not expose the signing key yet (upgrade it first)');
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -255,6 +257,53 @@ function clientAuthHeaders() {
   // is reset. Harmless to send every time.
   const pub = clientPubPem ? Buffer.from(clientPubPem).toString('base64') : '';
   return { 'x-ophq-client-ts': ts, 'x-ophq-client-sig': sig, 'x-ophq-client-pubkey': pub };
+}
+
+// ---------------------------------------------------------------------------
+// Identity: which machine is this, actually?
+// ---------------------------------------------------------------------------
+// The control-plane could see a connector's name and its token and nothing
+// else, so "which host is reporting through this connector" was unanswerable —
+// including in the middle of a duplicate-agent fight, where it is the only
+// question that matters. Reported on every connect as a header, so both
+// transports carry it and it never lands in a URL or an access log.
+//
+// install_id is DERIVED from the client public key rather than stored: the key
+// is already persisted and already unique per install, so there is no new file
+// to lose, no new thing to keep in sync, and no way for the id to drift from
+// the identity the server authenticates. No key configured means no id, which
+// is honest — there is nothing stable to derive one from.
+
+function agentVersion() {
+  // Ships beside src/ in the docker image and in the app's resources.
+  try {
+    const pkg = new URL('../package.json', import.meta.url);
+    return JSON.parse(fs.readFileSync(pkg, 'utf8')).version || 'unknown';
+  } catch { return process.env.OPHQ_CLIENT_VERSION || 'unknown'; }
+}
+
+function clientIdentity() {
+  const id = clientPubPem
+    ? crypto.createHash('sha256').update(clientPubPem).digest('hex').slice(0, 12)
+    : null;
+  return {
+    install_id: id,
+    hostname: os.hostname(),
+    pid: process.pid,
+    platform: process.platform,
+    arch: process.arch,
+    version: agentVersion(),
+    node: process.versions.node,
+    started_at: new Date(START_TIME).toISOString()
+  };
+}
+
+// Header rather than query string: it applies to both transports unchanged and
+// keeps hostnames out of proxy access logs.
+function identityHeaders() {
+  try {
+    return { 'x-ophq-client-identity': Buffer.from(JSON.stringify(clientIdentity())).toString('base64') };
+  } catch { return {}; }
 }
 
 // ---- allow-list ----------------------------------------------------------
@@ -626,7 +675,7 @@ async function connectWs() {
     let settled = false;
     let ws;
     try {
-      ws = new WebSocket(url, { headers: { authorization: `Bearer ${CONFIG.token}`, ...clientAuthHeaders() } });
+      ws = new WebSocket(url, { headers: { authorization: `Bearer ${CONFIG.token}`, ...clientAuthHeaders(), ...identityHeaders() } });
     } catch (e) { return reject(e); }
     ws.binaryType = 'arraybuffer';
 
@@ -642,13 +691,38 @@ async function connectWs() {
       }
     }, 10000);
 
+    // Half-open guard. On 2026-08-08 the control-plane closed a session while
+    // this side's socket stayed ESTABLISHED: the agent sat silent for thirty
+    // minutes, both Bambu printers stayed hard-offline, and nothing reconnected
+    // because nothing had noticed. The SSE transport has always had this — any
+    // byte, including the ':ping' comment, resets a watchdog — and the
+    // multiplexed tunnel shipped without it.
+    //
+    // Bytes alone cannot drive it here: Node's WebSocket does not surface
+    // ping/pong frames to JavaScript, so an idle-but-healthy session looks
+    // identical to a dead one. The control-plane therefore sends an application
+    // {kind:'ping'} frame on the same 20s heartbeat, and this arms against that.
+    // A control-plane too old to send one keeps working, on the reconnect that
+    // the expiry itself triggers.
+    let idle = null;
+    const bumpIdle = () => {
+      clearTimeout(idle);
+      idle = setTimeout(() => {
+        log(`no traffic on the multiplexed tunnel for ${Math.round(CONFIG.streamTimeoutMs / 1000)}s — treating it as half-open and reconnecting`);
+        try { ws.close(); } catch { /* already gone */ }
+      }, CONFIG.streamTimeoutMs);
+      idle.unref?.();
+    };
+
     ws.onopen = () => {
       clearTimeout(opening);
       activeWs = ws;
-      log(`connected to ${CONFIG.controlUrl} as "${CONFIG.name}" over a multiplexed tunnel`);
+      bumpIdle();
+      log(`connected to ${CONFIG.controlUrl} as "${CONFIG.name}" over a multiplexed tunnel (keep-alive ${Math.round(CONFIG.streamTimeoutMs / 1000)}s)`);
     };
 
     ws.onmessage = (ev) => {
+      bumpIdle();   // any frame at all is proof the far side is still there
       try {
         if (typeof ev.data !== 'string') {
           const buf = Buffer.from(ev.data);
@@ -661,12 +735,14 @@ async function connectWs() {
           return;
         }
         const job = JSON.parse(ev.data);
+        if (job && job.kind === 'ping') return;   // liveness only; already counted above
         if (job && job.id && (job.host || job.kind)) handleJob(job);
       } catch (e) { dbg('ws message error', e?.message); }
     };
 
     ws.onclose = (ev) => {
       clearTimeout(opening);
+      clearTimeout(idle);
       if (activeWs === ws) activeWs = null;
       sidxById.clear();
       // 1006/1012/1013 and a close before the session was usable mean the far
@@ -695,6 +771,7 @@ async function connectWs() {
 
     ws.onerror = () => {
       clearTimeout(opening);
+      clearTimeout(idle);
       // A failed connection is a reachability problem, not a capability one.
       if (!settled) { settled = true; const err = new Error('websocket connection failed'); err.transient = true; reject(err); }
     };
@@ -714,7 +791,7 @@ async function connectOnce() {
   let res;
   try {
     res = await fetch(url, {
-      headers: { authorization: `Bearer ${CONFIG.token}`, accept: 'text/event-stream', ...clientAuthHeaders() },
+      headers: { authorization: `Bearer ${CONFIG.token}`, accept: 'text/event-stream', ...clientAuthHeaders(), ...identityHeaders() },
       signal: ac.signal
     });
   } catch (e) { clearTimeout(idle); throw e; }
@@ -1002,7 +1079,7 @@ async function validateOnce() {
   const timer = setTimeout(() => ac.abort(), 10000);
   try {
     const res = await fetch(`${CONFIG.controlUrl}/api/connector/stream?name=validate`, {
-      headers: { authorization: `Bearer ${CONFIG.token}`, accept: 'text/event-stream', ...clientAuthHeaders() },
+      headers: { authorization: `Bearer ${CONFIG.token}`, accept: 'text/event-stream', ...clientAuthHeaders(), ...identityHeaders() },
       signal: ac.signal
     });
     clearTimeout(timer);

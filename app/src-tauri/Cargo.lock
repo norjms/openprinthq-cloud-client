@@ -2346,7 +2346,7 @@ dependencies = [
 
 [[package]]
 name = "openprinthq-cloud-client"
-version = "0.0.17"
+version = "0.0.18"
 dependencies = [
  "serde",
  "serde_json",

@@ -59,6 +59,15 @@ pub struct Config {
     /// Verbose connector logging (sets OPHQ_DEBUG for the agent).
     #[serde(default)]
     pub debug: bool,
+    /// Start the app at login. Defaults to TRUE so that upgrading an existing
+    /// install — whose config.json has no such key — keeps the behaviour it
+    /// already had, instead of silently losing autostart.
+    #[serde(default = "default_true")]
+    pub autostart: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 #[derive(Serialize, Clone, Default)]
@@ -482,6 +491,16 @@ fn save_config(
     config: Config,
 ) -> Result<(), String> {
     save_config_file(&state.config_path, &config)?;
+    // Apply the autostart choice immediately; waiting for the next launch would
+    // make the toggle look broken.
+    {
+        use tauri_plugin_autostart::ManagerExt;
+        let _ = if config.autostart {
+            app.autolaunch().enable()
+        } else {
+            app.autolaunch().disable()
+        };
+    }
     let st = state.inner().clone();
     stop_connector_internal(&st);
     if !st.status.lock().unwrap().managed_by_service {
@@ -813,10 +832,28 @@ pub fn run() {
             });
             app.manage(state.clone());
 
-            // Relaunch the tray app at login (best-effort).
+            // Honour the saved preference rather than asserting it.
+            //
+            // This used to call enable() unconditionally on every startup, which
+            // meant the app rewrote its own login entry every time it ran. Two
+            // consequences, both real: a user who turned autostart off got it
+            // turned back on behind them, and on 2026-08-24 an operator removed
+            // a duplicate Run key by hand, watched the app recreate it, and had
+            // no reason to suspect the app had done it. Autostart is the user's
+            // choice, and on a machine that also starts the client from a
+            // service or a scheduled task it is the choice that stops there
+            // being two.
             {
                 use tauri_plugin_autostart::ManagerExt;
-                let _ = app.autolaunch().enable();
+                let want = load_config(&state.config_path).autostart;
+                let have = app.autolaunch().is_enabled().unwrap_or(false);
+                if want != have {
+                    let _ = if want {
+                        app.autolaunch().enable()
+                    } else {
+                        app.autolaunch().disable()
+                    };
+                }
             }
 
             // ---- tray menu ----
