@@ -180,6 +180,7 @@
           <input id="test_printer" placeholder="192.168.1.50:7125" />
           <label for="signing_pubkey">Command-signing public key (PEM) <span class="muted">(recommended)</span></label>
           <textarea id="signing_pubkey" placeholder="-----BEGIN PUBLIC KEY-----&#10;...&#10;-----END PUBLIC KEY-----"></textarea>
+          <label class="check"><input type="checkbox" id="autostart" /> Start at login <span class="muted">(turn this off if a background service or a scheduled task already starts the client on this machine)</span></label>
           <label class="check"><input type="checkbox" id="debug" /> Verbose debug logging <span class="muted">(traces every job + LAN request; view under Tools → View logs)</span></label>
         </details>
 
@@ -257,12 +258,14 @@
       async function loadConfig() {
         const cfg = await invoke("get_config");
         for (const f of FIELDS) if (f in cfg) $(f).value = cfg[f] || "";
+        $("autostart").checked = cfg.autostart !== false;
         $("debug").checked = !!cfg.debug;
         return cfg;
       }
       async function saveConfig() {
         const config = {};
         for (const f of FIELDS) config[f] = $(f).value.trim();
+        config.autostart = $("autostart").checked;
         config.debug = $("debug").checked;
         await invoke("save_config", { config });
         setPill({ running: true, connected: false, message: "starting…" });
