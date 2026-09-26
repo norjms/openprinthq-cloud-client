@@ -18,6 +18,7 @@
 
 import { spawn, execFileSync } from 'node:child_process';
 import net from 'node:net';
+import dgram from 'node:dgram';
 import path from 'node:path';
 import os from 'node:os';
 import { writeFileSync, mkdirSync, existsSync, unlinkSync } from 'node:fs';
@@ -93,6 +94,39 @@ async function isGo2rtcUp() {
   } catch { return false; }
 }
 
+// Is a port free to bind? go2rtc does not fail when a listener cannot bind: it
+// logs at a level we do not capture and carries on without that module. On a
+// host-networked docker install next to Home Assistant (which ships its own
+// go2rtc on 18555) the WebRTC listener silently went missing, and a taken RTSP
+// port disables every ffmpeg-sourced stream ("exec: rtsp module disabled").
+// Checking first and moving to the next free port turns both into a log line.
+function tcpFree(port, host) {
+  return new Promise((resolve) => {
+    const srv = net.createServer();
+    srv.once('error', () => resolve(false));
+    srv.once('listening', () => srv.close(() => resolve(true)));
+    srv.listen(port, host);
+  });
+}
+function udpFree(port) {
+  return new Promise((resolve) => {
+    const sock = dgram.createSocket('udp4');
+    sock.once('error', () => { try { sock.close(); } catch { /* */ } resolve(false); });
+    sock.bind(port, () => sock.close(() => resolve(true)));
+  });
+}
+async function pickPort(start, { host, udp = false, label }) {
+  const first = Number(start);
+  for (let p = first; p < first + 20; p++) {
+    if (await tcpFree(p, host) && (!udp || await udpFree(p))) {
+      if (p !== first) log(`${label} port ${first} is in use by something else on this host - using ${p}`);
+      return p;
+    }
+  }
+  log(`${label}: no free port in ${first}-${first + 19}, trying ${first} anyway`);
+  return first;
+}
+
 // Start a local go2rtc if one isn't already reachable. We prefer a go2rtc binary
 // on PATH; if absent, camera relay for Bambu RTSPS is unavailable (Klipper MJPEG
 // still works via direct local HTTP fetch). Idempotent.
@@ -120,7 +154,15 @@ export async function ensureGo2rtc() {
       const stale = path.join(stateDir(), 'go2rtc.json');
       try { if (existsSync(stale)) unlinkSync(stale); } catch { /* best effort */ }
       const cfgPath = path.join(stateDir(), 'go2rtc.yaml');
-      writeFileSync(cfgPath, buildConfig(ffmpegBin, currentIce), 'utf8');
+      const ports = {
+        // Loopback only: this is go2rtc's internal hop for ffmpeg-sourced streams
+        // (ffmpeg publishes here, go2rtc reads it back). go2rtc's default is
+        // :8554 on every interface, which served the printers' camera feeds to
+        // the whole LAN with no authentication.
+        rtsp: await pickPort(process.env.OPHQ_GO2RTC_RTSP_PORT || 8554, { host: '127.0.0.1', label: 'go2rtc RTSP' }),
+        webrtc: await pickPort(WEBRTC_PORT, { udp: true, label: 'go2rtc WebRTC' })
+      };
+      writeFileSync(cfgPath, buildConfig(ffmpegBin, currentIce, ports), 'utf8');
       go2rtcProc = spawn(go2rtcBin, ['-config', cfgPath], { stdio: 'ignore', detached: false });
       go2rtcProc.on('exit', (code) => { log('go2rtc exited', code); go2rtcProc = null; });
       // wait up to ~5s for it to come up
@@ -154,13 +196,15 @@ let currentIce = [];
 // stream registration, writes itself, and then fails to start ever again. YAML
 // from the outset means what go2rtc appends stays consistent with what we wrote.
 function yamlQuote(v) { return "'" + String(v).replace(/'/g, "''") + "'"; }
-function buildConfig(ffmpegBin, ice) {
+function buildConfig(ffmpegBin, ice, ports = {}) {
   const servers = ice && ice.length ? ice : [{ urls: 'stun:stun.cloudflare.com:3478' }];
   const lines = [
     'api:',
     "  listen: '127.0.0.1:1984'",
+    'rtsp:',
+    `  listen: '127.0.0.1:${ports.rtsp || 8554}'`,
     'webrtc:',
-    `  listen: ':${WEBRTC_PORT}'`,
+    `  listen: ':${ports.webrtc || WEBRTC_PORT}'`,
     '  ice_servers:'
   ];
   for (const s of servers) {
@@ -170,17 +214,23 @@ function buildConfig(ffmpegBin, ice) {
     if (s.credential) lines.push(`      credential: ${yamlQuote(s.credential)}`);
   }
   lines.push('log:', '  level: warn');
-  if (ffmpegBin) {
-    lines.push('ffmpeg:', `  bin: ${yamlQuote(ffmpegBin)}`);
-    // Bambu printers present a self-signed certificate on their RTSPS port.
-    // go2rtc's native RTSPS client cannot accept it (on Windows the handshake
-    // fails inside SChannel with 0x80090325 and the producer simply stops ~60ms
-    // after starting, logging nothing), so the stream is pulled with ffmpeg
-    // instead. -tls_verify 0 has to precede -i, which is why this is an input
-    // TEMPLATE rather than an extra argument: go2rtc appends raw args after the
-    // input, where ffmpeg rejects them.
-    lines.push("  bambu: '-rtsp_transport tcp -tls_verify 0 -i {input}'");
-  }
+  // The ffmpeg section is written unconditionally. It used to depend on
+  // OPHQ_FFMPEG_BIN, which the desktop installers set and the docker image did
+  // not, so on docker the `bambu` input template below was never defined. Every
+  // Bambu stream is registered as `...#input=bambu`, and with no template go2rtc
+  // handed ffmpeg the literal word "bambu" as its input: every H2/X1 camera came
+  // back empty with nothing in the connector log. Without an explicit bin go2rtc
+  // uses `ffmpeg` from PATH, which is what the docker image ships.
+  lines.push('ffmpeg:');
+  if (ffmpegBin) lines.push(`  bin: ${yamlQuote(ffmpegBin)}`);
+  // Bambu printers present a self-signed certificate on their RTSPS port.
+  // go2rtc's native RTSPS client cannot accept it (on Windows the handshake
+  // fails inside SChannel with 0x80090325 and the producer simply stops ~60ms
+  // after starting, logging nothing), so the stream is pulled with ffmpeg
+  // instead. -tls_verify 0 has to precede -i, which is why this is an input
+  // TEMPLATE rather than an extra argument: go2rtc appends raw args after the
+  // input, where ffmpeg rejects them.
+  lines.push("  bambu: '-rtsp_transport tcp -tls_verify 0 -i {input}'");
   lines.push('');
   return lines.join('\n');
 }
