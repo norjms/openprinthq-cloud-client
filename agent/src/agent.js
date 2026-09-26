@@ -716,6 +716,12 @@ async function connectWs() {
 
     ws.onopen = () => {
       clearTimeout(opening);
+      // The session is usable from here on. Without this, `settled` stayed false
+      // for the whole life of the tunnel, so when a healthy session later closed
+      // (a control-plane restart, say) onclose took the "closed before it was
+      // usable" branch and rejected as transient. main() then fell back to the
+      // compatibility stream, which relayed Bambu MQTT cannot survive.
+      settled = true;
       activeWs = ws;
       bumpIdle();
       log(`connected to ${CONFIG.controlUrl} as "${CONFIG.name}" over a multiplexed tunnel (keep-alive ${Math.round(CONFIG.streamTimeoutMs / 1000)}s)`);
@@ -783,7 +789,12 @@ async function connectWs() {
   });
 }
 
-async function connectOnce() {
+// `maxMs` bounds the session. The compatibility stream is only a fallback, and a
+// healthy SSE session never ends on its own, so without a bound "retry the
+// tunnel on the next reconnect" meant never: the connector stayed on the slow
+// transport until someone restarted it. When the bound expires the session ends
+// cleanly and main() re-probes the multiplexed tunnel.
+async function connectOnce({ maxMs = 0 } = {}) {
   const url = `${CONFIG.controlUrl}/api/connector/stream?name=${encodeURIComponent(CONFIG.name)}&host_cidr=${encodeURIComponent(primaryHostCidr())}`;
   const ac = new AbortController();
   let idle = setTimeout(() => ac.abort(), CONFIG.streamTimeoutMs);
@@ -817,9 +828,15 @@ async function connectOnce() {
   const reader = res.body.getReader();
   const dec = new TextDecoder();
   let buf = '';
+  let expired = false;
+  const lifetime = maxMs > 0 ? setTimeout(() => { expired = true; ac.abort(); }, maxMs) : null;
+  lifetime?.unref?.();
   try {
     for (;;) {
-      const { value, done } = await reader.read();
+      let chunk;
+      try { chunk = await reader.read(); }
+      catch (e) { if (expired) return 'expired'; throw e; }
+      const { value, done } = chunk;
       if (done) throw new Error('stream closed by server');
       bump();                                                // any byte (incl. ':ping') resets the watchdog
       buf += dec.decode(value, { stream: true });
@@ -834,7 +851,7 @@ async function connectOnce() {
         if (job && job.id && (job.host || job.kind)) handleJob(job);  // fire-and-forget
       }
     }
-  } finally { clearTimeout(idle); }
+  } finally { clearTimeout(idle); if (lifetime) clearTimeout(lifetime); }
 }
 
 // ---------------------------------------------------------------------------
@@ -1013,6 +1030,9 @@ async function main() {
   // websockets" left the connector on the slow transport until someone noticed
   // and restarted it. Re-probe periodically instead.
   const WS_REPROBE_MS = Number(process.env.OPHQ_WS_REPROBE_MS || 10 * 60 * 1000);
+  // After a transient failure (the control-plane restarting), how long to sit on
+  // the compatibility stream before trying the tunnel again.
+  const WS_TRANSIENT_RETRY_MS = Number(process.env.OPHQ_WS_TRANSIENT_RETRY_MS || 60 * 1000);
   let wsRetryAt = 0;
   for (;;) {
     try {
@@ -1038,18 +1058,21 @@ async function main() {
           // because relayed MQTT cannot survive that path. Retry the upgrade on
           // the next reconnect instead; only a definite rejection downgrades.
           if (e?.transient) {
-            log('multiplexed tunnel not reachable right now (' + (e?.message || 'unknown') + ') - using the compatibility stream, retrying the tunnel on next reconnect');
-            await connectOnce();
+            log('multiplexed tunnel not reachable right now (' + (e?.message || 'unknown') + ') - using the compatibility stream'
+              + `, retrying the tunnel in ${Math.round(WS_TRANSIENT_RETRY_MS / 1000)}s`);
+            if (await connectOnce({ maxMs: WS_TRANSIENT_RETRY_MS }) === 'expired') log('re-checking whether the multiplexed tunnel is available');
           } else {
             log('multiplexed tunnel unavailable (' + (e?.message || 'unknown') + ') - using the compatibility stream'
               + `, re-checking in ${Math.round(WS_REPROBE_MS / 60000)}m`);
             useWs = false;
             wsRetryAt = Date.now() + WS_REPROBE_MS;
-            await connectOnce();
+            await connectOnce({ maxMs: WS_REPROBE_MS });
           }
         }
       } else {
-        await connectOnce();
+        // Bound it only when the tunnel is still on the table, so a site pinned
+        // to SSE with OPHQ_DISABLE_WS=1 is not churned for nothing.
+        await connectOnce({ maxMs: wsAllowed ? Math.max(1000, wsRetryAt - Date.now()) : 0 });
       }
       backoff = CONFIG.reconnectMinMs;
     } catch (e) {
