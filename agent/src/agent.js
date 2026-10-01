@@ -668,6 +668,11 @@ function primaryHostCidr() { return hostCidrs()[0] || ''; }
 // Node's built-in WebSocket accepts an auth header (undici extension), which
 // matters: the alternative would be putting the connector token in the query
 // string, where every reverse proxy in the path writes it to an access log.
+// How long teardown() waits for the far side to answer a close before giving up
+// on the socket. Short on purpose: by the time we are closing, the session is
+// already known to be dead or broken.
+const CLOSE_GRACE_MS = Number(process.env.OPHQ_CLOSE_GRACE_MS || 5000);
+
 async function connectWs() {
   const url = `${CONFIG.controlUrl.replace(/^http/, 'ws')}/api/connector/ws`
     + `?name=${encodeURIComponent(CONFIG.name)}&host_cidr=${encodeURIComponent(primaryHostCidr())}`;
@@ -708,10 +713,45 @@ async function connectWs() {
     const bumpIdle = () => {
       clearTimeout(idle);
       idle = setTimeout(() => {
-        log(`no traffic on the multiplexed tunnel for ${Math.round(CONFIG.streamTimeoutMs / 1000)}s — treating it as half-open and reconnecting`);
-        try { ws.close(); } catch { /* already gone */ }
+        teardown(`no traffic on the multiplexed tunnel for ${Math.round(CONFIG.streamTimeoutMs / 1000)}s, treating it as half-open`);
       }, CONFIG.streamTimeoutMs);
       idle.unref?.();
+    };
+
+    // A close that cannot hang. ws.close() starts the RFC 6455 closing
+    // handshake and 'close' only fires once the far side answers or TCP gives
+    // up. A half-open peer never answers, and TCP can take many minutes (or
+    // forever, with nothing unacknowledged in flight) to notice, so the session
+    // promise never settled and the connector sat silent. On 2026-09-29 that
+    // cost eight hours with every printer offline. After CLOSE_GRACE_MS we stop
+    // waiting: detach from the old socket and hand control back to main(),
+    // which reconnects. A late 'close' from the abandoned socket is ignored.
+    let finished = false;
+    let hardClose = null;
+    const finish = (why) => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(opening);
+      clearTimeout(idle);
+      clearTimeout(hardClose);
+      if (activeWs === ws) activeWs = null;
+      sidxById.clear();
+      if (why) log(`tunnel down: ${why}, reconnecting`);
+      if (!settled) {
+        settled = true;
+        const err = new Error(why || 'websocket closed before it was usable');
+        err.transient = true;
+        return reject(err);
+      }
+      resolve('closed');
+    };
+    const teardown = (why) => {
+      if (finished) return;
+      log(`${why}, closing the tunnel`);
+      clearTimeout(idle);
+      try { ws.close(); } catch { /* already gone */ }
+      hardClose = setTimeout(() => finish('close handshake got no answer'), CLOSE_GRACE_MS);
+      hardClose.unref?.();
     };
 
     ws.onopen = () => {
@@ -728,6 +768,7 @@ async function connectWs() {
     };
 
     ws.onmessage = (ev) => {
+      if (finished) return;
       bumpIdle();   // any frame at all is proof the far side is still there
       try {
         if (typeof ev.data !== 'string') {
@@ -747,8 +788,10 @@ async function connectWs() {
     };
 
     ws.onclose = (ev) => {
+      if (finished) return;   // abandoned by teardown(); main() already moved on
       clearTimeout(opening);
       clearTimeout(idle);
+      clearTimeout(hardClose);
       if (activeWs === ws) activeWs = null;
       sidxById.clear();
       // 1006/1012/1013 and a close before the session was usable mean the far
@@ -763,23 +806,31 @@ async function connectWs() {
           : `the connector token was rejected. Check the token in Settings \u2192 Connectors`);
         err.authRejected = true;
         err.keyLocked = keyLocked;
-        if (!settled) { settled = true; return reject(err); }
-        return;
+        if (!settled) { finished = true; settled = true; return reject(err); }
+        // The promise is still pending even though `settled` is set, so reject
+        // it: main() then applies the slow auth back-off instead of hammering.
+        finished = true;
+        clearTimeout(hardClose);
+        return reject(err);
       }
       if (!settled) {
+        finished = true;
         settled = true;
         const err = new Error('websocket closed before it was usable');
         err.transient = transientClose || true; // a close during handshake is never proof of non-support
         return reject(err);
       }
-      resolve('closed');
+      finish(`closed by the far side (code ${ev?.code ?? 'none'}${ev?.reason ? ', ' + ev.reason : ''})`);
     };
 
-    ws.onerror = () => {
+    ws.onerror = (ev) => {
+      if (finished) return;
       clearTimeout(opening);
-      clearTimeout(idle);
       // A failed connection is a reachability problem, not a capability one.
-      if (!settled) { settled = true; const err = new Error('websocket connection failed'); err.transient = true; reject(err); }
+      if (!settled) { finished = true; settled = true; clearTimeout(idle); const err = new Error('websocket connection failed'); err.transient = true; return reject(err); }
+      // After open: 'close' normally follows, but do not bet the connector on
+      // it. Tear down with the same bounded wait as a watchdog expiry.
+      teardown(`tunnel error${ev?.message ? ' (' + ev.message + ')' : ''}`);
     };
 
     // Resolve only when the session ends; main()'s loop treats a return as
