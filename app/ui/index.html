@@ -1,110 +1,106 @@
 <!DOCTYPE html>
 <!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
-<html lang="en">
+<html lang="en" data-theme="glass-dark">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>OpenPrintHQ Cloud Client</title>
+    <!-- The look is artisanhub-ui's glass-dark, copied into ui/ by scripts/sync-ui.mjs (fonts bundled, nothing fetched). -->
+    <link rel="stylesheet" href="ui/fonts.css" />
+    <link rel="stylesheet" href="ui/theme.css" />
+    <link rel="stylesheet" href="ui/base.css" />
     <style>
-      :root {
-        --bg: #0f1115;
-        --panel: #171a21;
-        --panel-2: #1e222b;
-        --text: #e7e9ee;
-        --muted: #9aa2b1;
-        --accent: #4c8dff;
-        --ok: #37c46b;
-        --warn: #f0b429;
-        --err: #ef5b5b;
-        --border: #272c37;
+      @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+        :root:not([data-transparency="on"]) { --ah-glass: var(--ah-solid-panel); --ah-blur: none; }
       }
-      * { box-sizing: border-box; }
+      html, body { height: 100%; }
       body {
-        margin: 0;
-        font: 13px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-        background: var(--bg);
-        color: var(--text);
-        -webkit-user-select: none;
-        user-select: none;
+        margin: 0; display: flex; flex-direction: column; overflow: hidden;
+        -webkit-user-select: none; user-select: none;
       }
-      header {
-        display: flex; align-items: center; gap: 10px;
-        padding: 14px 16px; border-bottom: 1px solid var(--border);
-      }
-      header .mark {
-        width: 26px; height: 26px; border-radius: 7px;
-        background: linear-gradient(135deg, var(--accent), #7b5bff);
-        display: grid; place-items: center; font-weight: 700; color: #fff; font-size: 13px;
-      }
-      header h1 { font-size: 14px; margin: 0; font-weight: 600; }
-      header .sub { color: var(--muted); font-size: 11px; }
-      .pill {
-        margin-left: auto; display: inline-flex; align-items: center; gap: 6px;
-        padding: 4px 10px; border-radius: 999px; font-size: 11px; font-weight: 600;
-        background: var(--panel-2); color: var(--muted); border: 1px solid var(--border);
-      }
+      header { display: flex; align-items: center; gap: 12px; padding: 16px 20px 12px; flex: none; }
+      header .grow { min-width: 0; }
+      header h1 { font-family: var(--ah-font-display); font-weight: 500; letter-spacing: -0.03em; font-size: 22px; line-height: 1.15; margin: 0; }
+      header .sub { color: var(--ah-text-3); font-size: 12px; }
+      .ah-icon-tile svg { width: 20px; height: 20px; }
+      .pill { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; padding: 2px 10px; border-radius: 999px; font-size: 12px;
+        line-height: 18px; font-weight: 500; white-space: nowrap; border: 1px solid var(--ah-field-line);
+        background: linear-gradient(var(--ah-chip-neutral-bg), var(--ah-chip-neutral-bg)), var(--ah-chip-underlay); color: var(--ah-text); }
       .pill.flash { animation: pulse 0.6s ease; }
-      @keyframes pulse { 0% { transform: scale(1); } 30% { transform: scale(1.12); filter: brightness(1.4); } 100% { transform: scale(1); } }
-      .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
-      .pill.ok { color: var(--ok); } .pill.ok .dot { background: var(--ok); box-shadow: 0 0 6px var(--ok); }
-      .pill.warn { color: var(--warn); } .pill.warn .dot { background: var(--warn); }
-      .pill.err { color: var(--err); } .pill.err .dot { background: var(--err); }
-      main { padding: 14px 16px 20px; }
-      .card { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 14px; margin-bottom: 12px; }
-      .card h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin: 0 0 10px; }
-      label { display: block; font-size: 11px; color: var(--muted); margin: 10px 0 4px; }
-      label.check { display: flex; align-items: flex-start; gap: 8px; margin: 12px 0 2px; }
-      label.check input { width: auto; margin-top: 1px; }
+      @keyframes pulse { 0% { transform: scale(1); } 30% { transform: scale(1.08); } 100% { transform: scale(1); } }
+      @media (prefers-reduced-motion: reduce) { .pill.flash { animation: none; } }
+      .dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+      .pill.ok { border-color: var(--ah-chip-ok-line); background: linear-gradient(var(--ah-chip-ok-bg), var(--ah-chip-ok-bg)), var(--ah-chip-underlay); color: var(--ah-chip-ok-text); }
+      .pill.warn { border-color: var(--ah-chip-warn-line); background: linear-gradient(var(--ah-chip-warn-bg), var(--ah-chip-warn-bg)), var(--ah-chip-underlay); color: var(--ah-chip-warn-text); }
+      .pill.err { border-color: var(--ah-chip-bad-line); background: linear-gradient(var(--ah-chip-bad-bg), var(--ah-chip-bad-bg)), var(--ah-chip-underlay); color: var(--ah-chip-bad-text); }
+      main { flex: 1; min-height: 0; overflow: auto; padding: 4px 20px 12px; }
+      .cols { display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px; }
+      @media (min-width: 820px) { .cols { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: start; } }
+      .card { background: var(--ah-glass); border: 1px solid var(--ah-glass-line); border-radius: var(--ah-radius-card);
+        backdrop-filter: var(--ah-blur); -webkit-backdrop-filter: var(--ah-blur); padding: 16px 18px; }
+      .card h2 { font-size: 17px; font-weight: 600; margin: 0 0 4px; }
+      label { display: block; font-size: 12px; color: var(--ah-text-2); margin: 12px 0 6px; }
+      label.check { display: flex; align-items: center; gap: 12px; margin: 14px 0 2px; font-size: 13px; color: var(--ah-text); }
+      label.check span.t { flex: 1; min-width: 0; }
+      label.check .muted { display: block; font-size: 12px; }
       input, textarea {
-        width: 100%; background: var(--panel-2); border: 1px solid var(--border); color: var(--text);
-        border-radius: 8px; padding: 8px 10px; font: inherit; user-select: text;
+        width: 100%; background: var(--ah-field); border: 1px solid var(--ah-field-line); color: var(--ah-text);
+        border-radius: var(--ah-radius-btn-sm); padding: 0 12px; height: 38px; font: 14px var(--ah-font-sans); user-select: text;
       }
-      input:focus, textarea:focus { outline: none; border-color: var(--accent); }
-      textarea { resize: vertical; min-height: 54px; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 11px; }
-      .btns { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
-      button {
-        appearance: none; border: 1px solid var(--border); background: var(--panel-2); color: var(--text);
-        border-radius: 8px; padding: 8px 12px; font: inherit; font-weight: 600; cursor: pointer;
-      }
-      button:hover { border-color: var(--accent); }
-      button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
-      button:disabled { opacity: 0.45; cursor: default; border-color: var(--border); }
-      button:disabled:hover { border-color: var(--border); }
-      .muted { color: var(--muted); }
-      .svcnote { display: none; margin-top: 8px; font-size: 11px; color: var(--warn); }
-      .svcnote.show { display: block; }
-      details summary { cursor: pointer; color: var(--muted); font-size: 11px; margin-top: 6px; }
+      textarea { resize: vertical; min-height: 64px; height: auto; padding: 8px 12px; font: 12px var(--ah-font-mono); }
+      input[type=checkbox] { appearance: none; -webkit-appearance: none; flex: none; width: 46px; height: 26px; padding: 0; margin: 0;
+        border: 0; border-radius: 13px; background: var(--ah-track); position: relative; cursor: pointer; }
+      input[type=checkbox]::after { content: ""; position: absolute; top: 3px; left: 3px; width: 20px; height: 20px; border-radius: 50%;
+        background: var(--ah-text); transition: left 0.15s; }
+      input[type=checkbox]:checked { background: var(--ah-accent); }
+      input[type=checkbox]:checked::after { left: 23px; background: var(--ah-on-accent); }
+      .btns { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+      button { appearance: none; display: inline-flex; align-items: center; justify-content: center; gap: 8px; height: 38px; padding: 0 16px;
+        border: 1px solid var(--ah-field-line); background: var(--ah-glass); color: var(--ah-text); border-radius: var(--ah-radius-btn);
+        font: 600 14px var(--ah-font-sans); cursor: pointer; white-space: nowrap; }
+      button:hover { border-color: rgba(255, 255, 255, 0.35); }
+      button.primary { background: var(--ah-accent); border-color: var(--ah-accent); color: var(--ah-on-accent); }
+      button.ghost { background: transparent; border-color: rgba(255, 255, 255, 0.25); }
+      button:disabled { opacity: 0.45; cursor: default; }
+      .tools button { height: 32px; padding: 0 12px; font-size: 13px; border-radius: var(--ah-radius-btn-sm); }
+      .muted { color: var(--ah-text-3); }
+      .hint { color: var(--ah-text-3); font-size: 12px; margin: 6px 0 0; }
+      .svcnote { display: none; margin-top: 12px; font-size: 13px; }
+      .svcnote.show { display: flex; }
+      details { margin-top: 14px; border-top: 1px solid var(--ah-row-line); padding-top: 10px; }
+      details summary { cursor: pointer; color: var(--ah-text-2); font-size: 13px; font-weight: 600; }
       .out {
-        margin-top: 10px; background: #10131a; border: 1px solid var(--border); border-radius: 8px;
-        padding: 10px; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 11px;
+        margin-top: 12px; background: var(--ah-panel); border: 1px solid var(--ah-panel-line); border-radius: 12px;
+        padding: 10px 12px; font: 12px/1.5 var(--ah-font-mono); color: var(--ah-text-2); max-height: 260px; overflow: auto;
         white-space: pre-wrap; word-break: break-all; user-select: text; display: none;
       }
       .out.show { display: block; }
-      footer { padding: 10px 16px 16px; color: var(--muted); font-size: 11px; display: flex; gap: 10px; align-items: center; }
-      footer a { color: var(--accent); text-decoration: none; cursor: pointer; }
+      footer { padding: 10px 20px 14px; color: var(--ah-text-3); font-size: 12px; display: flex; gap: 14px; align-items: center; flex: none; }
+      footer a { color: var(--ah-link); text-decoration: none; cursor: pointer; }
       .grow { flex: 1; }
       /* ---- first-run wizard ---- */
       #wizard { display: none; }
-      #wizard.show { display: block; }
+      #wizard.show { display: grid; place-items: center; min-height: 100%; }
+      #wizard .card { width: min(520px, 100%); padding: 22px 24px; }
       #normal { display: none; }
       #normal.show { display: block; }
-      .wtitle { font-size: 16px; font-weight: 700; margin: 2px 0 6px; }
-      .wlead { color: var(--muted); font-size: 12px; margin: 0 0 12px; }
-      .steps { display: flex; gap: 6px; margin-bottom: 12px; }
-      .stepdot { flex: 1; height: 4px; border-radius: 999px; background: var(--panel-2); }
-      .stepdot.on { background: var(--accent); }
-      .result { margin-top: 10px; padding: 10px; border-radius: 8px; font-size: 12px; display: none; }
-      .result.show { display: block; }
-      .result.ok { background: rgba(55,196,107,0.1); border: 1px solid rgba(55,196,107,0.4); color: var(--ok); }
-      .result.err { background: rgba(239,91,91,0.1); border: 1px solid rgba(239,91,91,0.4); color: var(--err); }
-      .result.busy { background: var(--panel-2); border: 1px solid var(--border); color: var(--muted); }
-      .link { color: var(--accent); cursor: pointer; text-decoration: none; }
+      .wtitle { display: flex; align-items: center; gap: 10px; font-family: var(--ah-font-display); font-weight: 500; letter-spacing: -0.03em;
+        font-size: 26px; line-height: 1.15; margin: 2px 0 8px; }
+      .wtitle svg { width: 24px; height: 24px; color: var(--ah-success); flex: none; }
+      .wlead { color: var(--ah-text-2); font-size: 14px; margin: 0 0 12px; }
+      .steps { display: flex; gap: 6px; margin-bottom: 16px; }
+      .stepdot { flex: 1; height: 4px; border-radius: 999px; background: var(--ah-track); }
+      .stepdot.on { background: var(--ah-accent); }
+      .result { margin-top: 12px; display: none; font-size: 13px; }
+      .result.show { display: flex; }
+      .result.busy { border-color: var(--ah-panel-line); background: var(--ah-panel); color: var(--ah-text-2); }
+      .link { color: var(--ah-link); cursor: pointer; text-decoration: none; }
     </style>
   </head>
-  <body>
+  <body class="ah-root ah-page">
     <header>
-      <div class="mark">OP</div>
-      <div>
+      <span class="ah-icon-tile" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12h4l3-7 4 14 3-7h2"/></svg></span>
+      <div class="grow">
         <h1>OpenPrintHQ Cloud Client</h1>
         <div class="sub">Local connector · outbound-only</div>
       </div>
@@ -123,8 +119,8 @@
 
           <!-- step 0: welcome -->
           <div class="wstep" id="w0">
-            <div class="wtitle">Welcome 👋</div>
-            <p class="wlead">This app connects your local 3D printers to your cloud OpenPrintHQ account. It dials <b>out</b> only — no port-forwarding, nothing to open on your firewall. Let's get it connected.</p>
+            <div class="wtitle">Welcome</div>
+            <p class="wlead">This app connects your local 3D printers to your cloud OpenPrintHQ account. It dials <b>out</b> only: no port-forwarding, nothing to open on your firewall. Let's get it connected.</p>
             <div class="btns"><button class="primary" id="wnext0">Get started</button></div>
           </div>
 
@@ -141,21 +137,22 @@
             <div class="result" id="w_result"></div>
             <div class="btns">
               <button class="primary" id="wtest">Test connection</button>
-              <button id="wback1">Back</button>
+              <button class="ghost" id="wback1">Back</button>
             </div>
           </div>
 
           <!-- step 2: done -->
           <div class="wstep" id="w2" style="display:none">
-            <div class="wtitle">✓ Connected</div>
-            <p class="wlead">Your instance accepted this connector. Finish to save and start it — it'll keep running in the menu bar / tray. This connector pairs to your instance on first connect; nothing else to copy.</p>
-            <div class="btns"><button class="primary" id="wfinish">Finish &amp; start</button></div>
+            <div class="wtitle"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l5 5L20 7"/></svg>Connected</div>
+            <p class="wlead">Your instance accepted this connector. Finish to save and start it; it keeps running in the menu bar or tray. This connector pairs to your instance on first connect; nothing else to copy.</p>
+            <div class="btns"><button class="primary" id="wfinish">Finish and start</button></div>
           </div>
         </div>
       </div>
 
       <!-- ===================== NORMAL UI ===================== -->
       <div id="normal">
+      <div class="cols">
       <div class="card">
         <h2>Connection</h2>
         <label for="control_url">Your OpenPrintHQ instance URL</label>
@@ -164,6 +161,13 @@
         <input id="token" type="password" placeholder="paste your connector token" />
         <label for="name">Connector name</label>
         <input id="name" placeholder="cloud-client" />
+
+        <div class="btns">
+          <button class="primary" id="save">Save and connect</button>
+          <button id="start">Start</button>
+          <button class="ghost" id="stop">Stop</button>
+        </div>
+        <div class="svcnote ah-banner" id="svcnote">A background service is managing the connector, so Start and Stop here don't apply. Control it from the service (Windows Services, launchd or systemd).</div>
 
         <details>
           <summary>Advanced (allow-list, ports, signing key, test printer)</summary>
@@ -180,19 +184,12 @@
           <input id="test_printer" placeholder="192.0.2.50:7125" />
           <label for="signing_pubkey">Command-signing public key (PEM) <span class="muted">(recommended)</span></label>
           <textarea id="signing_pubkey" placeholder="-----BEGIN PUBLIC KEY-----&#10;...&#10;-----END PUBLIC KEY-----"></textarea>
-          <label class="check"><input type="checkbox" id="autostart" /> Start at login <span class="muted">(turn this off if a background service or a scheduled task already starts the client on this machine)</span></label>
-          <label class="check"><input type="checkbox" id="debug" /> Verbose debug logging <span class="muted">(traces every job + LAN request; view under Tools → View logs)</span></label>
+          <label class="check"><span class="t">Start at login <span class="muted">(turn this off if a background service or a scheduled task already starts the client on this machine)</span></span><input type="checkbox" id="autostart" /></label>
+          <label class="check"><span class="t">Verbose debug logging <span class="muted">(traces every job + LAN request; view under Tools → View logs)</span></span><input type="checkbox" id="debug" /></label>
         </details>
-
-        <div class="btns">
-          <button class="primary" id="save">Save &amp; connect</button>
-          <button id="start">Start</button>
-          <button id="stop">Stop</button>
-        </div>
-        <div class="svcnote" id="svcnote">A background service is managing the connector, so Start/Stop here don't apply — control it from the service (Windows Services / launchd / systemd).</div>
       </div>
 
-      <div class="card">
+      <div class="card tools">
         <h2>Tools</h2>
         <div class="btns">
           <button id="dashboard">Open dashboard</button>
@@ -203,6 +200,7 @@
           <button id="update">Check for updates</button>
         </div>
         <div id="out" class="out"></div>
+      </div>
       </div>
       </div>
     </main>
@@ -309,9 +307,9 @@
       async function selfTest() {
         showOut("Running self-test…");
         const r = await invoke("run_self_test");
-        let out = `Cloud: ${r.cloud_ok ? "OK" : "FAIL"} — ${r.cloud_detail}\n`;
+        let out = `Cloud: ${r.cloud_ok ? "OK" : "FAIL"} (${r.cloud_detail})\n`;
         if (r.printer_ok === null) out += "Printer: (no test printer set)";
-        else out += `Printer: ${r.printer_ok ? "OK" : "FAIL"} — ${r.printer_detail}`;
+        else out += `Printer: ${r.printer_ok ? "OK" : "FAIL"} (${r.printer_detail})`;
         showOut(out);
       }
 
@@ -347,12 +345,12 @@
       async function wtest() {
         const url = $("w_url").value.trim(), token = $("w_token").value.trim();
         const r = $("w_result");
-        r.className = "result show busy"; r.textContent = "Testing connection…";
+        r.className = "result show ah-banner busy"; r.textContent = "Testing connection…";
         try {
           const res = await invoke("validate_connection", { url, token });
-          if (res.ok) { r.className = "result show ok"; r.textContent = "✓ " + res.reason; validated = true; wshow(2); }
-          else { r.className = "result show err"; r.textContent = "✕ " + res.reason; validated = false; }
-        } catch (e) { r.className = "result show err"; r.textContent = "✕ " + e; validated = false; }
+          if (res.ok) { r.className = "result show ah-banner ah-banner--live"; r.textContent = res.reason; validated = true; wshow(2); }
+          else { r.className = "result show ah-banner ah-banner--bad"; r.textContent = res.reason; validated = false; }
+        } catch (e) { r.className = "result show ah-banner ah-banner--bad"; r.textContent = String(e); validated = false; }
       }
       async function wfinish() {
         // Copy wizard values into the real fields and save.

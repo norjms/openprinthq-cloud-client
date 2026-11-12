@@ -31,6 +31,13 @@ self-test connectivity to your instance and to your printers. Everything is outb
 - `installer/` — WiX (`.msi`), pkgbuild (`.pkg`), and packaging notes.
 - `.gitea/workflows/` — CI: `build-linux.yml`, `build-windows.yml`, and `release.yml`.
 
+## Look
+
+The window's web UI (`app/ui`) uses artisanhub-ui's glass-dark theme (pinned at 0.1.0), the look shared by the
+OpenPrintHQ and ArtisanHub apps, with Manrope and Sora bundled (`scripts/sync-ui.mjs` copies them into
+`app/ui/ui/`; nothing is fetched). The window opens at 960 x 640 with a dark native title bar.
+`node scripts/ui-screenshots.mjs <out>` renders the window in Chromium and WebKit with sample data (needs playwright).
+
 ## Build from source
 
 ```bash
