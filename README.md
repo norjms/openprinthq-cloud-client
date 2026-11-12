@@ -60,4 +60,5 @@ Download from your OpenPrintHQ dashboard (**Printers → Connect a printer**) or
 
 ## License
 
-AGPL-3.0-or-later. See [LICENSE](LICENSE).
+AGPL-3.0-or-later. See [LICENSE](LICENSE). The installers bundle Node.js, go2rtc and FFmpeg as separate
+programs under their own licences; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

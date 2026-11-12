@@ -99,12 +99,13 @@ if [ "$TARGET" = "universal-apple-darwin" ]; then
   bash "$HERE/fetch-camera-tools.sh" x86_64-apple-darwin "app/src-tauri/binaries"
   if command -v lipo >/dev/null 2>&1; then
     for tool in go2rtc ffmpeg; do
-      if lipo -create "app/src-tauri/binaries/${tool}-aarch64-apple-darwin" "app/src-tauri/binaries/${tool}-x86_64-apple-darwin" -output "app/src-tauri/binaries/${tool}-universal-apple-darwin" 2>/dev/null; then
-        chmod +x "app/src-tauri/binaries/${tool}-universal-apple-darwin"
-      else
-        cp "app/src-tauri/binaries/${tool}-${HOST_TRIPLE}" "app/src-tauri/binaries/${tool}-universal-apple-darwin"
-        chmod +x "app/src-tauri/binaries/${tool}-universal-apple-darwin"
-      fi
+      # A universal app must carry both slices of every sidecar. Copying the
+      # host's binary in place of a failed lipo would ship an app that cannot
+      # transcode cameras on the other architecture, so stop instead.
+      lipo -create "app/src-tauri/binaries/${tool}-aarch64-apple-darwin" "app/src-tauri/binaries/${tool}-x86_64-apple-darwin" \
+        -output "app/src-tauri/binaries/${tool}-universal-apple-darwin" \
+        || { echo "ERROR: could not make a universal ${tool}" >&2; exit 1; }
+      chmod +x "app/src-tauri/binaries/${tool}-universal-apple-darwin"
     done
   fi
 else
@@ -135,7 +136,10 @@ echo "==> Sidecar ready: $EXPECT"
 # x86_64 Node sidecar. Fall back to a plain native build only when rustup/the
 # target aren't available.
 echo "==> tauri build..."
-if command -v rustup >/dev/null 2>&1 && rustup target list --installed 2>/dev/null | grep -qx "$TARGET"; then
+# universal-apple-darwin is not a rustup target of its own: it is the two targets
+# added above, and tauri-cli builds both and joins them. Testing it against the
+# installed list would always fall through to a host-only build.
+if command -v rustup >/dev/null 2>&1 && { [ "$TARGET" = "universal-apple-darwin" ] || rustup target list --installed 2>/dev/null | grep -qx "$TARGET"; }; then
   ( cd app && cargo tauri build --target "$TARGET" --bundles app )
   APP_DIR="app/src-tauri/target/$TARGET/release/bundle/macos"
 else
@@ -145,6 +149,19 @@ fi
 APP_PATH="$(/usr/bin/find "$APP_DIR" -maxdepth 1 -name '*.app' | head -n1)"
 [ -n "$APP_PATH" ] || { echo "ERROR: no .app produced under $APP_DIR"; exit 1; }
 echo "==> Built app: $APP_PATH"
+
+# A universal app has to be universal all the way down: check the app binary and
+# every sidecar carry both slices before packaging it.
+if [ "$TARGET" = "universal-apple-darwin" ]; then
+  for bin in "$APP_PATH"/Contents/MacOS/*; do
+    ARCHS="$(lipo -archs "$bin")"
+    if [[ " $ARCHS " == *" x86_64 "* && " $ARCHS " == *" arm64 "* ]]; then
+      echo "    $(basename "$bin"): $ARCHS"
+    else
+      echo "ERROR: $(basename "$bin") is not universal ($ARCHS)" >&2; exit 1
+    fi
+  done
+fi
 
 # --- assemble the .pkg ------------------------------------------------------
 PKG="OpenPrintHQ-Cloud-Client-${VERSION}-macos.pkg"
